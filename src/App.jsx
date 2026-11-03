@@ -6,19 +6,42 @@ import {
   Contrast,
   Download,
   ImagePlus,
+  Redo2,
   RotateCcw,
+  RotateCw,
   Sun,
+  Undo2,
   Thermometer,
   X,
 } from "lucide-react";
 import { ADJUSTMENTS, FILTERS } from "./filters.js";
 import {
+  getCropGeometry,
   renderFiltered,
   renderFilteredAsync,
   resolveRecipe,
 } from "./image-processing.js";
 
-const DEMO_URL = "/stillroom-demo-portrait.jpg";
+const DEMO_URL = import.meta.env.DEV
+  ? "/tests/fixtures/demo-user-provided.webp"
+  : null;
+const INITIAL_CROP = {
+  ratio: "original",
+  zoom: 1,
+  offsetX: 0,
+  offsetY: 0,
+  rotation: 0,
+};
+const ZERO_RECIPE = Object.fromEntries(
+  Object.keys(FILTERS[0].recipe).map((key) => [key, 0]),
+);
+const CROP_RATIOS = [
+  { value: "original", label: "Original" },
+  { value: "1:1", label: "1:1" },
+  { value: "3:2", label: "3:2" },
+  { value: "4:5", label: "4:5" },
+  { value: "9:16", label: "9:16" },
+];
 const QUICK_SETTINGS = [
   { key: "temp", label: "Temp", Icon: Thermometer },
   { key: "contrast", label: "Contrast", Icon: Contrast },
@@ -40,10 +63,17 @@ function LogoMark() {
 function App() {
   const [image, setImage] = useState(null);
   const [photoUrl, setPhotoUrl] = useState(DEMO_URL);
-  const [photoName, setPhotoName] = useState("A moment in soft light");
+  const [photoName, setPhotoName] = useState(
+    DEMO_URL ? "User-provided demo sample" : "",
+  );
   const [selectedId, setSelectedId] = useState(FILTERS[0].id);
   const [recipe, setRecipe] = useState({ ...FILTERS[0].recipe });
   const [intensity, setIntensity] = useState(72);
+  const [crop, setCrop] = useState({ ...INITIAL_CROP });
+  const [historyFlags, setHistoryFlags] = useState({
+    canUndo: false,
+    canRedo: false,
+  });
   const [tab, setTab] = useState("filters");
   const [compare, setCompare] = useState(false);
   const [dragging, setDragging] = useState(false);
@@ -58,10 +88,14 @@ function App() {
   const [loading, setLoading] = useState(true);
   const [thumbnails, setThumbnails] = useState({});
   const canvasRef = useRef(null);
+  const originalCanvasRef = useRef(null);
   const inputRef = useRef(null);
   const exportSheetRef = useRef(null);
   const loadSequence = useRef(0);
   const currentObjectUrl = useRef(null);
+  const historyRef = useRef({ past: [], future: [] });
+  const historyTransaction = useRef(false);
+  const cropDrag = useRef(null);
   const activeFilter = useMemo(
     () => FILTERS.find((filter) => filter.id === selectedId) ?? FILTERS[0],
     [selectedId],
@@ -70,8 +104,19 @@ function App() {
     () => resolveRecipe(activeFilter.recipe, recipe, intensity),
     [activeFilter, recipe, intensity],
   );
+  const cropGeometry = useMemo(
+    () =>
+      image
+        ? getCropGeometry(image.naturalWidth, image.naturalHeight, crop)
+        : null,
+    [image, crop],
+  );
 
   useEffect(() => {
+    if (!DEMO_URL) {
+      setLoading(false);
+      return undefined;
+    }
     const requestId = ++loadSequence.current;
     const demo = new Image();
     demo.onload = () => {
@@ -89,17 +134,24 @@ function App() {
   }, []);
 
   useEffect(() => {
-    if (!image || !canvasRef.current) return;
+    if (!image || !canvasRef.current || !originalCanvasRef.current) return;
     const timer = window.setTimeout(() => {
       try {
-        renderFiltered(image, canvasRef.current, effectiveRecipe, 1500);
+        renderFiltered(
+          image,
+          originalCanvasRef.current,
+          ZERO_RECIPE,
+          1500,
+          crop,
+        );
+        renderFiltered(image, canvasRef.current, effectiveRecipe, 1500, crop);
       } catch (error) {
         console.error("Could not preview this image", error);
         notify("This photo is too large to preview in this browser.");
       }
     }, 20);
     return () => window.clearTimeout(timer);
-  }, [image, effectiveRecipe]);
+  }, [image, effectiveRecipe, crop]);
 
   useEffect(() => {
     if (!image) return undefined;
@@ -112,6 +164,7 @@ function App() {
             thumbnail,
             resolveRecipe(filter.recipe, filter.recipe, 72),
             180,
+            crop,
           );
           return [filter.id, thumbnail.toDataURL("image/png")];
         }),
@@ -119,7 +172,7 @@ function App() {
       setThumbnails(nextThumbnails);
     }, 30);
     return () => window.clearTimeout(timer);
-  }, [image]);
+  }, [image, crop]);
 
   useEffect(() => {
     if (!toast) return undefined;
@@ -164,7 +217,154 @@ function App() {
     setToast(message);
   }
 
+  function captureEdit() {
+    return { selectedId, recipe: { ...recipe }, intensity, crop: { ...crop } };
+  }
+
+  function syncHistoryFlags() {
+    setHistoryFlags({
+      canUndo: historyRef.current.past.length > 0,
+      canRedo: historyRef.current.future.length > 0,
+    });
+  }
+
+  function recordEdit() {
+    historyRef.current.past = [...historyRef.current.past, captureEdit()].slice(
+      -40,
+    );
+    historyRef.current.future = [];
+    historyTransaction.current = false;
+    syncHistoryFlags();
+  }
+
+  function beginHistoryTransaction() {
+    if (!historyTransaction.current) {
+      historyRef.current.past = [
+        ...historyRef.current.past,
+        captureEdit(),
+      ].slice(-40);
+      historyRef.current.future = [];
+      historyTransaction.current = true;
+      syncHistoryFlags();
+    }
+  }
+
+  function endHistoryTransaction() {
+    historyTransaction.current = false;
+  }
+
+  function clearHistory() {
+    historyRef.current = { past: [], future: [] };
+    historyTransaction.current = false;
+    syncHistoryFlags();
+  }
+
+  function applyEdit(edit) {
+    setSelectedId(edit.selectedId);
+    setRecipe({ ...edit.recipe });
+    setIntensity(edit.intensity);
+    setCrop({ ...edit.crop });
+  }
+
+  function undoEdit() {
+    historyTransaction.current = false;
+    const previous = historyRef.current.past.pop();
+    if (!previous) return;
+    historyRef.current.future.push(captureEdit());
+    applyEdit(previous);
+    syncHistoryFlags();
+  }
+
+  function redoEdit() {
+    historyTransaction.current = false;
+    const next = historyRef.current.future.pop();
+    if (!next) return;
+    historyRef.current.past = [...historyRef.current.past, captureEdit()].slice(
+      -40,
+    );
+    applyEdit(next);
+    syncHistoryFlags();
+  }
+
+  function chooseCropRatio(ratio) {
+    recordEdit();
+    setCrop((previous) => ({ ...previous, ratio, offsetX: 0, offsetY: 0 }));
+  }
+
+  function updateCrop(key, value) {
+    beginHistoryTransaction();
+    setCrop((previous) => ({ ...previous, [key]: value }));
+  }
+
+  function rotateCrop(direction) {
+    recordEdit();
+    setCrop((previous) => ({
+      ...previous,
+      rotation: (previous.rotation + direction + 360) % 360,
+      offsetX: 0,
+      offsetY: 0,
+    }));
+  }
+
+  function resetCrop() {
+    recordEdit();
+    setCrop({ ...INITIAL_CROP });
+  }
+
+  function beginCropPan(event) {
+    if (tab !== "crop" || event.button > 0 || !cropGeometry) return;
+    event.preventDefault();
+    beginHistoryTransaction();
+    event.currentTarget.setPointerCapture?.(event.pointerId);
+    const rect = event.currentTarget.getBoundingClientRect();
+    const horizontalRange = cropGeometry.orientedWidth - cropGeometry.width;
+    const verticalRange = cropGeometry.orientedHeight - cropGeometry.height;
+    cropDrag.current = {
+      x: event.clientX,
+      y: event.clientY,
+      offsetXPerPixel:
+        horizontalRange > 0
+          ? (2 * cropGeometry.width) / (rect.width * horizontalRange)
+          : 0,
+      offsetYPerPixel:
+        verticalRange > 0
+          ? (2 * cropGeometry.height) / (rect.height * verticalRange)
+          : 0,
+    };
+  }
+
+  function moveCropPan(event) {
+    if (!cropDrag.current) return;
+    const dx = event.clientX - cropDrag.current.x;
+    const dy = event.clientY - cropDrag.current.y;
+    cropDrag.current.x = event.clientX;
+    cropDrag.current.y = event.clientY;
+    setCrop((previous) => ({
+      ...previous,
+      offsetX: Math.max(
+        -1,
+        Math.min(
+          1,
+          previous.offsetX - dx * cropDrag.current.offsetXPerPixel,
+        ),
+      ),
+      offsetY: Math.max(
+        -1,
+        Math.min(
+          1,
+          previous.offsetY - dy * cropDrag.current.offsetYPerPixel,
+        ),
+      ),
+    }));
+  }
+
+  function finishCropPan() {
+    cropDrag.current = null;
+    endHistoryTransaction();
+  }
+
   function chooseFilter(filter) {
+    recordEdit();
     setSelectedId(filter.id);
     setRecipe({ ...filter.recipe });
     setIntensity(72);
@@ -190,6 +390,8 @@ function App() {
       setPhotoUrl(nextUrl);
       setPhotoName(file.name.replace(/\.[^.]+$/, ""));
       setImage(nextImage);
+      setCrop({ ...INITIAL_CROP });
+      clearHistory();
       setLoading(false);
       setCompare(false);
       notify("Photo ready — it stays on your device.");
@@ -218,10 +420,12 @@ function App() {
   }
 
   function updateAdjustment(key, value) {
+    beginHistoryTransaction();
     setRecipe((previous) => ({ ...previous, [key]: Number(value) }));
   }
 
   function resetRecipe() {
+    recordEdit();
     setRecipe({ ...activeFilter.recipe });
     setIntensity(72);
     notify("Back to the original recipe.");
@@ -253,6 +457,7 @@ function App() {
         effectiveRecipe,
         maxEdge,
         (progress) => notify(`Processing locally… ${progress}%`),
+        crop,
       );
       const mime = exportFormat === "png" ? "image/png" : "image/jpeg";
       const quality = exportFormat === "png" ? undefined : 0.94;
@@ -283,9 +488,9 @@ function App() {
     }
   }
 
-  const aspectLabel = image
-    ? `${image.naturalWidth > image.naturalHeight ? "Landscape" : image.naturalWidth < image.naturalHeight ? "Portrait" : "Square"} · ${simplifyRatio(image.naturalWidth, image.naturalHeight)}`
-    : "Portrait · 4:5";
+  const aspectLabel = cropGeometry
+    ? `${cropGeometry.ratio > 1.04 ? "Landscape" : cropGeometry.ratio < 0.96 ? "Portrait" : "Square"} · ${crop.ratio === "original" ? `Original · ${simplifyRatio(cropGeometry.width, cropGeometry.height)}` : crop.ratio}`
+    : "Portrait · Original";
 
   return (
     <div className="app-shell" onDragOver={(event) => event.preventDefault()}>
@@ -298,15 +503,39 @@ function App() {
       />
 
       <header className="topbar">
-        <button
-          className="top-import"
-          type="button"
-          onClick={openPicker}
-          aria-label="Import a photo"
-        >
-          <ChevronLeft size={20} strokeWidth={1.8} />
-          <span>Import</span>
-        </button>
+        <div className="top-start">
+          <button
+            className="top-import"
+            type="button"
+            onClick={openPicker}
+            aria-label="Import a photo"
+          >
+            <ChevronLeft size={20} strokeWidth={1.8} />
+            <span>Import</span>
+          </button>
+          <div className="history-tools" aria-label="Edit history">
+            <button
+              className="history-button"
+              type="button"
+              aria-label="Undo"
+              title="Undo"
+              disabled={!historyFlags.canUndo}
+              onClick={undoEdit}
+            >
+              <Undo2 size={17} />
+            </button>
+            <button
+              className="history-button"
+              type="button"
+              aria-label="Redo"
+              title="Redo"
+              disabled={!historyFlags.canRedo}
+              onClick={redoEdit}
+            >
+              <Redo2 size={17} />
+            </button>
+          </div>
+        </div>
         <a className="brand" href="#top" aria-label="Stillroom home">
           <LogoMark />
           <span>STILLROOM</span>
@@ -338,46 +567,27 @@ function App() {
         >
           {image ? (
             <div
-              className="photo-stage"
-              role="button"
-              tabIndex={0}
-              aria-label={
-                compare
-                  ? "Showing original; release to see the edit"
-                  : "Hold photo to see the original"
-              }
-              aria-pressed={compare}
+              className={`photo-stage ${tab === "crop" ? "is-cropping" : ""}`}
               style={{
-                aspectRatio: `${image.naturalWidth} / ${image.naturalHeight}`,
-                "--photo-ratio": image.naturalWidth / image.naturalHeight,
+                aspectRatio: `${cropGeometry.ratio}`,
+                "--photo-ratio": cropGeometry.ratio,
               }}
-              onPointerDown={(event) => {
-                if (event.button !== 0) return;
-                event.currentTarget.setPointerCapture?.(event.pointerId);
-                setCompare(true);
-              }}
-              onPointerUp={() => setCompare(false)}
-              onPointerCancel={() => setCompare(false)}
-              onContextMenu={(event) => event.preventDefault()}
-              onKeyDown={(event) => {
-                if (event.key === " " || event.key === "Enter") {
-                  event.preventDefault();
-                  setCompare(true);
-                }
-              }}
-              onKeyUp={(event) => {
-                if (event.key === " " || event.key === "Enter") {
-                  event.preventDefault();
-                  setCompare(false);
-                }
-              }}
-              onBlur={() => setCompare(false)}
+              onPointerDown={beginCropPan}
+              onPointerMove={moveCropPan}
+              onPointerUp={finishCropPan}
+              onPointerCancel={finishCropPan}
             >
               <img
-                className="original-photo"
+                className="original-photo source-only"
                 src={photoUrl}
                 alt={photoName}
                 draggable="false"
+                aria-hidden="true"
+              />
+              <canvas
+                ref={originalCanvasRef}
+                className="original-framing"
+                aria-label="Original photo framing"
               />
               <canvas
                 ref={canvasRef}
@@ -385,6 +595,43 @@ function App() {
                 aria-label={`${activeFilter.name} filter preview`}
               />
               {compare && <div className="compare-tag">Original</div>}
+              {tab !== "crop" && (
+                <button
+                  className={`compare-button ${compare ? "compare-active" : ""}`}
+                  type="button"
+                  aria-label={
+                    compare
+                      ? "Showing original; release to see the edit"
+                      : "Hold to compare with original"
+                  }
+                  onPointerDown={(event) => {
+                    event.currentTarget.setPointerCapture?.(event.pointerId);
+                    setCompare(true);
+                  }}
+                  onPointerUp={() => setCompare(false)}
+                  onPointerCancel={() => setCompare(false)}
+                  onPointerLeave={() => setCompare(false)}
+                  onContextMenu={(event) => event.preventDefault()}
+                  onKeyDown={(event) => {
+                    if (event.key === " " || event.key === "Enter") {
+                      event.preventDefault();
+                      setCompare(true);
+                    }
+                  }}
+                  onKeyUp={(event) => {
+                    if (event.key === " " || event.key === "Enter") {
+                      event.preventDefault();
+                      setCompare(false);
+                    }
+                  }}
+                  onBlur={() => setCompare(false)}
+                  aria-pressed={compare}
+                >
+                  <span className="compare-symbol">
+                    <span />
+                  </span>
+                </button>
+              )}
               {dragging && (
                 <div className="drop-hint">
                   <ImagePlus size={28} />
@@ -401,7 +648,9 @@ function App() {
             </button>
           )}
         </section>
-        <div className="compare-caption">Hold photo to see original</div>
+        <div className="compare-caption">
+          {tab === "crop" ? "Drag to reposition" : "Hold to compare"}
+        </div>
 
         <section className="filter-intro" aria-live="polite">
           <div className="filter-heading">
@@ -426,7 +675,15 @@ function App() {
               min="0"
               max="100"
               value={intensity}
-              onChange={(event) => setIntensity(Number(event.target.value))}
+              onChange={(event) => {
+                beginHistoryTransaction();
+                setIntensity(Number(event.target.value));
+              }}
+              onPointerDown={beginHistoryTransaction}
+              onKeyDown={beginHistoryTransaction}
+              onPointerUp={endHistoryTransaction}
+              onKeyUp={endHistoryTransaction}
+              onBlur={endHistoryTransaction}
               style={{ "--range-fill": `${intensity}%` }}
             />
             <output>{intensity}%</output>
@@ -467,6 +724,15 @@ function App() {
               onClick={() => setTab("filters")}
             >
               Filters
+            </button>
+            <button
+              type="button"
+              role="tab"
+              aria-selected={tab === "crop"}
+              className={tab === "crop" ? "active" : ""}
+              onClick={() => setTab("crop")}
+            >
+              Crop
             </button>
             <button
               type="button"
@@ -517,7 +783,7 @@ function App() {
                 </button>
               ))}
             </div>
-          ) : (
+          ) : tab === "adjust" ? (
             <div className="adjustment-grid">
               {ADJUSTMENTS.map((adjustment) => {
                 const value = recipe[adjustment.key];
@@ -542,12 +808,90 @@ function App() {
                       onChange={(event) =>
                         updateAdjustment(adjustment.key, event.target.value)
                       }
+                      onPointerDown={beginHistoryTransaction}
+                      onKeyDown={beginHistoryTransaction}
+                      onPointerUp={endHistoryTransaction}
+                      onKeyUp={endHistoryTransaction}
+                      onBlur={endHistoryTransaction}
                       style={{ "--range-fill": `${progress}%` }}
                       aria-label={adjustment.label}
                     />
                   </label>
                 );
               })}
+            </div>
+          ) : (
+            <div className="crop-panel">
+              <div className="crop-section-label">FRAME</div>
+              <div
+                className="crop-ratios"
+                role="group"
+                aria-label="Crop aspect ratio"
+              >
+                {CROP_RATIOS.map((ratio) => (
+                  <button
+                    key={ratio.value}
+                    type="button"
+                    className={`ratio-button ${crop.ratio === ratio.value ? "selected" : ""}`}
+                    aria-pressed={crop.ratio === ratio.value}
+                    onClick={() => chooseCropRatio(ratio.value)}
+                  >
+                    {ratio.label}
+                  </button>
+                ))}
+              </div>
+              <div className="crop-tools">
+                <button
+                  type="button"
+                  className="crop-tool-button"
+                  aria-label="Rotate left"
+                  onClick={() => rotateCrop(-90)}
+                >
+                  <RotateCcw size={17} />
+                  <span>Rotate left</span>
+                </button>
+                <button
+                  type="button"
+                  className="crop-tool-button"
+                  aria-label="Rotate right"
+                  onClick={() => rotateCrop(90)}
+                >
+                  <RotateCw size={17} />
+                  <span>Rotate right</span>
+                </button>
+                <button
+                  type="button"
+                  className="reset-button crop-reset"
+                  onClick={resetCrop}
+                >
+                  Reset framing
+                </button>
+              </div>
+              <label className="crop-zoom" htmlFor="crop-zoom-range">
+                <span>Zoom</span>
+                <input
+                  id="crop-zoom-range"
+                  type="range"
+                  min="1"
+                  max="3"
+                  step="0.01"
+                  value={crop.zoom}
+                  aria-label="Crop zoom"
+                  onChange={(event) =>
+                    updateCrop("zoom", Number(event.target.value))
+                  }
+                  onPointerDown={beginHistoryTransaction}
+                  onKeyDown={beginHistoryTransaction}
+                  onPointerUp={endHistoryTransaction}
+                  onKeyUp={endHistoryTransaction}
+                  onBlur={endHistoryTransaction}
+                  style={{ "--range-fill": `${((crop.zoom - 1) / 2) * 100}%` }}
+                />
+                <output>{crop.zoom.toFixed(2)}×</output>
+              </label>
+              <p className="crop-hint">
+                Drag the photo to reposition it. All edits stay on this device.
+              </p>
             </div>
           )}
         </section>
@@ -571,6 +915,13 @@ function App() {
           <span className="privacy-dot" />
           Your photo stays in this browser
         </div>
+        {DEMO_URL && (
+          <p className="photo-credit">
+            Demo sample: user-provided image. Rights for public reuse have not
+            been verified; this asset is included only in this local review
+            build.
+          </p>
+        )}
       </main>
 
       {toast && (
@@ -673,6 +1024,9 @@ function App() {
 function simplifyRatio(width, height) {
   if (!width || !height) return "4:5";
   const ratio = width / height;
+  if (Math.abs(ratio - 9 / 16) < 0.04) return "9:16";
+  if (Math.abs(ratio - 16 / 9) < 0.04) return "16:9";
+  if (Math.abs(ratio - 2 / 3) < 0.04) return "2:3";
   if (Math.abs(ratio - 4 / 5) < 0.04) return "4:5";
   if (Math.abs(ratio - 3 / 2) < 0.04) return "3:2";
   if (Math.abs(ratio - 1) < 0.04) return "1:1";
