@@ -3,19 +3,22 @@ import fs from "node:fs/promises";
 import path from "node:path";
 
 const filterNames = [
-  "Linen Veil",
-  "Greenroom",
-  "Apricot Glass",
-  "Blue Hour",
-  "Soft Current",
-  "4:16 PM",
-  "Red Ledger",
-  "Rose Dust",
+  "B1",
+  "B5",
+  "F2",
+  "G3",
+  "M3",
+  "M5",
+  "P5",
+  "T1",
+  "X1",
 ];
 const artifacts = path.resolve("artifacts");
 
 async function ready(page) {
   await page.goto("/");
+  await page.evaluate(() => window.localStorage.clear());
+  await page.reload();
   await page.waitForFunction(() => {
     const image = document.querySelector(".original-photo");
     const canvas = document.querySelector(".processed-photo");
@@ -44,7 +47,7 @@ test("mobile and desktop layouts stay within the viewport", async ({
   page.on("pageerror", (error) => errors.push(error.message));
   await ready(page);
   await expect(
-    page.getByRole("heading", { name: "Linen Veil", exact: true }),
+    page.getByRole("heading", { name: "B1", exact: true }),
   ).toBeVisible();
   await expect(page.locator(".original-photo")).toHaveAttribute(
     "src",
@@ -57,8 +60,8 @@ test("mobile and desktop layouts stay within the viewport", async ({
     page.getByText(/Rights for public reuse have not been verified/),
   ).toBeVisible();
   await expect(
-    page.getByRole("group", { name: "Signature filters" }).getByRole("button"),
-  ).toHaveCount(8);
+    page.getByRole("tabpanel", { name: "Presets" }).getByRole("button"),
+  ).toHaveCount(24);
   await page.screenshot({
     path: path.join(artifacts, "stillroom-mobile.png"),
     fullPage: true,
@@ -69,7 +72,7 @@ test("mobile and desktop layouts stay within the viewport", async ({
     path: path.join(artifacts, "stillroom-crop-review.png"),
     fullPage: true,
   });
-  await page.getByRole("tab", { name: "Filters", exact: true }).click();
+  await page.getByRole("tab", { name: "Presets", exact: true }).click();
   for (const width of [320, 375, 390, 768, 1440]) {
     await page.setViewportSize({ width, height: 900 });
     const layout = await page.evaluate(() => ({
@@ -88,12 +91,30 @@ test("mobile and desktop layouts stay within the viewport", async ({
   expect(errors).toEqual([]);
 });
 
-test("every filter changes the preview; intensity, compare, and adjustments work", async ({
+test("every preset changes the preview; intensity, compare, and adjustments work", async ({
   page,
 }) => {
   await ready(page);
   const checksums = [];
-  for (const name of filterNames) {
+  const allCodes = [
+    ...filterNames,
+    "A4",
+    "A5",
+    "A6",
+    "C1",
+    "C2",
+    "C3",
+    "G6",
+    "HB1",
+    "HB2",
+    "AL1",
+    "AL3",
+    "SS1",
+    "WE4",
+    "KE1",
+    "KP1",
+  ];
+  for (const name of allCodes) {
     const previous = await fingerprint(page);
     await page.getByRole("button", { name, exact: true }).click();
     await expect(
@@ -102,11 +123,11 @@ test("every filter changes the preview; intensity, compare, and adjustments work
     await expect(
       page.getByRole("button", { name, exact: true }),
     ).toHaveAttribute("aria-pressed", "true");
-    if (name !== "Linen Veil")
+    if (name !== "B1")
       await expect.poll(() => fingerprint(page)).not.toBe(previous);
     checksums.push(await fingerprint(page));
   }
-  expect(new Set(checksums).size).toBe(8);
+  expect(new Set(checksums).size).toBe(24);
 
   const intensity = page.locator("#intensity-range");
   await intensity.press("Home");
@@ -130,6 +151,7 @@ test("every filter changes the preview; intensity, compare, and adjustments work
   await expect(page.locator(".processed-photo")).not.toHaveClass(/is-hidden/);
 
   await page.getByRole("tab", { name: "Adjust", exact: true }).click();
+  await page.getByRole("button", { name: "Color", exact: true }).click();
   const temperature = page.getByRole("slider", {
     name: "Temperature",
     exact: true,
@@ -142,7 +164,7 @@ test("every filter changes the preview; intensity, compare, and adjustments work
     fullPage: true,
   });
   await page.getByRole("button", { name: "Reset", exact: true }).click();
-  await expect(temperature).toHaveValue("4");
+  await expect(temperature).toHaveValue("11");
   await expect(intensity).toHaveValue("72");
 });
 
@@ -367,4 +389,124 @@ test("local import keeps the image ratio and downloads valid PNG and JPG files",
   const jpgData = await fs.readFile(jpgPath);
   expect(jpgData.subarray(0, 2).toString("hex")).toBe("ffd8");
   expect(jpgData.length).toBeGreaterThan(1000);
+});
+
+test("straighten and flip change the framing without empty corners", async ({ page }) => {
+  await ready(page);
+  await page
+    .locator('input[type="file"]')
+    .setInputFiles(path.resolve("tests/fixtures/landscape.png"));
+  await page.waitForFunction(
+    () => document.querySelector(".original-photo")?.naturalWidth === 1280,
+  );
+  await page.getByRole("tab", { name: "Crop", exact: true }).click();
+
+  const before = await fingerprint(page);
+  const straighten = page.getByRole("slider", { name: "Straighten", exact: true });
+  await straighten.fill("12");
+  await expect(straighten).toHaveValue("12");
+  await expect.poll(() => fingerprint(page)).not.toBe(before);
+
+  // Every corner must still hold image content, never transparent canvas.
+  const cornersOpaque = await page.locator(".original-framing").evaluate((canvas) => {
+    const ctx = canvas.getContext("2d");
+    const points = [
+      [1, 1],
+      [canvas.width - 2, 1],
+      [1, canvas.height - 2],
+      [canvas.width - 2, canvas.height - 2],
+    ];
+    return points.every(([x, y]) => ctx.getImageData(x, y, 1, 1).data[3] === 255);
+  });
+  expect(cornersOpaque).toBe(true);
+
+  await page.getByRole("button", { name: "Reset framing", exact: true }).click();
+  const flippedBefore = await fingerprint(page);
+  await page.getByRole("button", { name: "Flip horizontally", exact: true }).click();
+  await expect(
+    page.getByRole("button", { name: "Flip horizontally", exact: true }),
+  ).toHaveAttribute("aria-pressed", "true");
+  await expect.poll(() => fingerprint(page)).not.toBe(flippedBefore);
+});
+
+test("saved looks, copy and paste edits, and session restore work", async ({ page }) => {
+  await ready(page);
+  await page.getByRole("button", { name: "A6", exact: true }).click();
+  await expect(page.getByRole("heading", { name: "A6", exact: true })).toBeVisible();
+
+  await page.getByRole("button", { name: "Save look", exact: true }).click();
+  await expect(page.getByRole("dialog", { name: "Save this look" })).toBeVisible();
+  await page.locator(".preset-name-field input").fill("Morning");
+  await page.getByRole("button", { name: "Save look", exact: true }).last().click();
+  await expect(page.getByRole("button", { name: "Morning", exact: true })).toBeVisible();
+  await expect(page.getByRole("button", { name: "A6", exact: true }).first()).toBeVisible();
+
+  await page.getByRole("button", { name: "Copy edit", exact: true }).click();
+  await page.getByRole("button", { name: "B5", exact: true }).click();
+  await expect(page.getByRole("heading", { name: "B5", exact: true })).toBeVisible();
+  await page.getByRole("button", { name: "Paste", exact: true }).click();
+  await expect(page.getByRole("heading", { name: "B5", exact: true })).toBeVisible();
+  const intensity = page.locator("#intensity-range");
+  await expect(intensity).toHaveValue("72");
+
+  // The saved look survives a reload, and the session restores the selection.
+  await page.reload();
+  await page.waitForFunction(
+    () => document.querySelector(".processed-photo")?.width > 0,
+  );
+  await expect(page.getByRole("button", { name: "Morning", exact: true })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "B5", exact: true })).toBeVisible();
+});
+
+test("keyboard shortcuts drive history, export, and preview", async ({ page }) => {
+  await ready(page);
+  const undo = page.getByRole("button", { name: "Undo", exact: true });
+  await expect(undo).toBeDisabled();
+
+  await page.getByRole("button", { name: "C1", exact: true }).click();
+  await page.getByRole("heading", { name: "C1", exact: true }).click();
+  await page.keyboard.press("Control+z");
+  await expect(page.getByRole("heading", { name: "B1", exact: true })).toBeVisible();
+  await page.keyboard.press("Control+Shift+z");
+  await expect(page.getByRole("heading", { name: "C1", exact: true })).toBeVisible();
+
+  await page.keyboard.press("Control+s");
+  await expect(page.getByRole("dialog", { name: "Export your edit" })).toBeVisible();
+  await page.keyboard.press("Escape");
+  await expect(page.getByRole("dialog")).toHaveCount(0);
+
+  await page.keyboard.press("2");
+  await expect(page.getByRole("tab", { name: "Crop", exact: true })).toHaveAttribute(
+    "aria-selected",
+    "true",
+  );
+  await page.keyboard.press("3");
+  await expect(page.getByRole("tab", { name: "Adjust", exact: true })).toHaveAttribute(
+    "aria-selected",
+    "true",
+  );
+
+  // Space compares against the original while held.
+  await page.keyboard.press("1");
+  await page.keyboard.down(" ");
+  await expect(page.getByText("Original", { exact: true })).toBeVisible();
+  await page.keyboard.up(" ");
+  await expect(page.getByText("Original", { exact: true })).toHaveCount(0);
+});
+
+test("split tone and HSL grading alter the preview", async ({ page }) => {
+  await ready(page);
+  await page.getByRole("tab", { name: "Adjust", exact: true }).click();
+  await page.getByRole("button", { name: "Grade", exact: true }).click();
+  const before = await fingerprint(page);
+  const shadowTone = page.getByRole("slider", { name: "Shadow tone", exact: true });
+  await shadowTone.fill("70");
+  await expect.poll(() => fingerprint(page)).not.toBe(before);
+
+  const gradeAfter = await fingerprint(page);
+  await page.getByRole("button", { name: "HSL", exact: true }).click();
+  await page.getByRole("button", { name: "Blue", exact: true }).click();
+  const hue = page.getByRole("slider", { name: "blue Hue", exact: true });
+  await hue.fill("60");
+  await expect.poll(() => fingerprint(page)).not.toBe(gradeAfter);
 });

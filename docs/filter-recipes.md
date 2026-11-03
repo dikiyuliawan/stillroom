@@ -1,45 +1,91 @@
-# Field Notes — 8 konsep filter original
+# Stillroom — preset & tool reference
 
-Resep ini adalah titik awal, bukan preset VSCO: skala **Temp, Tint, Contrast, Saturation, Highlights, Shadows** memakai rentang **−100 sampai +100**; Exposure memakai EV; Fade dan Grain memakai 0–100. Coba mulai dari Exposure dan White Balance foto sumber, lalu sesuaikan tipis-tipis.
+Stillroom ships a **24-look preset library**. The look codes (A6, M5, C1 …) mirror
+the naming people recognise from VSCO so a familiar starting point is easy to
+find. Every look is Stillroom's **own numeric recipe** running on its own canvas
+pipeline — no third-party preset data is copied or reproduced.
 
-## 01 — Linen Veil
-Netral lembut dengan highlight krem dan kontras santai. Cocok untuk potret, interior terang, dan foto keseharian.
+## Access tiers
 
-**Recipe:** Exposure +0.10 EV · Contrast −12 · Saturation −10 · Temp +5 · Highlights −8 · Shadows +10 · Fade 7 · Grain 12.
+VSCO gates part of its library behind a subscription. Stillroom mirrors that
+grouping so the library reads the way you remember it, but **everything is
+unlocked** because all editing happens on your device.
 
-## 02 — Greenroom
-Hijau dibuat lebih tenang dan sedikit zaitun; warna lain tetap terasa alami. Bagus untuk tanaman, kafe, dan suasana jalan.
+| Tier | Looks |
+| --- | --- |
+| **Free** | B1, B5, F2, G3, M3, M5, P5, T1, X1 |
+| **Pro** | A4, A5, A6, C1, C2, C3, G6, HB1, HB2, AL1, AL3, SS1, WE4, KE1, KP1 |
 
-**Recipe:** Exposure +0.05 EV · Contrast −8 · Saturation −13 · Temp −3 · Tint −2 (ke hijau) · Highlights −8 · Shadows +10 · Fade 4 · Grain 16.
+## Free-tier looks
 
-## 03 — Apricot Glass
-Cahaya sore hangat tanpa membuat kulit atau dinding jadi jingga berlebihan. Coba untuk potret dan cahaya jendela.
+| Code | Mood | Character |
+| --- | --- | --- |
+| B1 | Muted black & white · gentle contrast | Desaturated with a light fade and fine grain. |
+| B5 | High-contrast black & white | Deeper blacks, held highlights, more grain. |
+| F2 | Cool and faded · soft shadows | Cool cast, lifted shadows, gentle fade. |
+| G3 | Warm with lifted shadows | Warm tint with quiet greens and a soft fade. |
+| M3 | Soft and muted · quiet color | Low saturation with creamy highlights. |
+| M5 | Bright golden · the popular one | Brighter exposure, warm, restrained color. |
+| P5 | Warm vintage · amber shadows | Amber split-toned shadows and a visible fade. |
+| T1 | Moody fade · cool shadows | Slightly underexposed, cool blue shadows. |
+| X1 | Punchy warm · crisp detail | Strong contrast with warm, vivid color. |
 
-**Recipe:** Exposure +0.12 EV · Contrast +3 · Saturation −4 · Temp +9 · Tint +2 · Highlights −13 · Shadows +7 · Fade 3 · Grain 12.
+## Pro-tier looks
 
-## 04 — Blue Hour
-Bayangan biru-abu yang lebih padat, dengan warna tetap terkendali. Pas untuk jalan kota, langit mendung, dan frame malam yang masih punya detail.
+| Code | Mood | Character |
+| --- | --- | --- |
+| A4 | Clean neutral · balanced skin | Balanced contrast, near-neutral colour. |
+| A5 | Warm vintage · creamy highlights | Warm highlights via split toning. |
+| A6 | Editorial warm · rich midtones | Warm midtones, protected highlights. |
+| C1 | Vibrant warm · saturated color | Higher contrast and saturation. |
+| C2 | Cool vibrant · clean blues | Cool cast with clean blues. |
+| C3 | Deep punch · dense shadows | Strong contrast with crushed blacks. |
+| G6 | Rich warm · film shadows | Warm with amber shadow toning. |
+| HB1 | Clean muted · even light | Restrained saturation, even light. |
+| HB2 | Cool clean · restrained color | Cool, clean, low saturation. |
+| AL1 | Warm editorial · soft contrast | Warm editorial with a soft fade. |
+| AL3 | Golden film · glowing light | Golden highlights and coarse grain. |
+| SS1 | Creamy moody · soft falloff | Soft contrast and a creamy fade. |
+| WE4 | Soft matte · lifted blacks | Matte look with cool-toned shadows. |
+| KE1 | Faded film · coarse grain | Heavy fade with large grain. |
+| KP1 | Retro warm · soft amber | Warm retro with amber shadows. |
 
-**Recipe:** Exposure −0.05 EV · Contrast +12 · Saturation −16 · Temp −9 · Tint +1 · Highlights −12 · Shadows +6 · Fade 2 · Grain 20.
+## Scale of the recipe values
 
-## 05 — Soft Current
-Dingin, ringan, dan sedikit matte; memberi ruang pada putih serta bayangan. Enak untuk pantai, perjalanan, dan foto berawan.
+| Control | Range | Unit |
+| --- | --- | --- |
+| Exposure | −1 … +1 | EV |
+| Temp, Tint, Contrast, Saturation, Vibrance | −100 … +100 | — |
+| Highlights, Shadows, Whites, Blacks | −100 … +100 | — |
+| Clarity, Sharpen, Fade, Grain, Grain size | 0 … 100 | — |
+| Vignette | −100 … +100 | — |
+| Split-tone strength | 0 … 100 | — |
+| Split-tone hue | 0 … 359 | degrees |
+| HSL hue / saturation / luminance | −100 … +100 | — |
 
-**Recipe:** Exposure +0.12 EV · Contrast −13 · Saturation −16 · Temp −6 · Tint −1 · Highlights −8 · Shadows +15 · Fade 10 · Grain 9.
+A preset is only a **starting point**. Intensity scales the preset from 0–100%;
+manual tweaks are applied on top at full strength, so dialling a preset down
+never dilutes a correction you made by hand.
 
-## 06 — 4:16 PM
-Hangat dan jernih, seolah terkena matahari sore, tetapi highlight tetap dijaga. Gunakan untuk street, makanan, atau pemandangan terang.
+## Editing tools
 
-**Recipe:** Exposure +0.08 EV · Contrast +8 · Saturation +2 · Temp +11 · Tint +1 · Highlights −17 · Shadows +4 · Fade 2 · Grain 12.
+- **Presets** — 24 built-in looks plus any you save yourself.
+- **Crop** — aspect ratios, rotate 90°, horizontal/vertical flip, fine-angle
+  straighten (the frame auto-shrinks so no empty corners appear), zoom, and pan.
+- **Adjust** — Light (exposure, contrast, highlights, shadows, whites, blacks),
+  Color (temperature, tint, saturation, vibrance), Effects (clarity, sharpen,
+  fade, grain, grain size, vignette).
+- **Grade** — split toning: independent shadow and highlight hue plus strength.
+- **HSL** — per-channel hue, saturation, and luminance for red, orange, yellow,
+  green, blue, and purple.
+- **Copy / Paste edit** — carry the full look between photos.
+- **Save look** — store your current recipe as a reusable preset.
 
-## 07 — Red Ledger
-Kontras lebih tegas dengan warna yang tetap hidup—terutama merah bata, kain, atau detail signage. Cocok untuk editorial dan arsitektur.
+## Notes
 
-**Recipe:** Exposure 0 EV · Contrast +17 · Saturation +6 · Temp +1 · Tint +1 · Highlights −11 · Shadows −4 · Fade 0 · Grain 23.
-
-## 08 — Rose Dust
-Lembut dengan semburat rose halus dan ujung tonal yang pudar; bukan pink menyeluruh. Coba untuk portrait, bunga, atau cahaya senja.
-
-**Recipe:** Exposure +0.07 EV · Contrast −10 · Saturation −13 · Temp +4 · Tint +4 (ke magenta) · Highlights −9 · Shadows +9 · Fade 10 · Grain 14.
-
-**Catatan uji:** Foto contoh pada lembar perbandingan dibuat sintetis khusus untuk studi warna. Penampilan recipe dapat bergeser menurut kamera, white balance, dan pencahayaan foto asli.
+- Saved looks and the current session live in this browser's `localStorage`.
+  Large imports restore their settings but not the photo itself, because browsers
+  cap local storage near 5 MB.
+- Clarity and sharpen use a whole-image blur pass, so previews and exports always
+  agree and tiled export never shows seams.
+- Grain is deterministic: the same edit exports identically every time.

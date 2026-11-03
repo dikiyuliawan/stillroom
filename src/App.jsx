@@ -3,34 +3,61 @@ import {
   Aperture,
   Check,
   ChevronLeft,
+  ClipboardPaste,
   Contrast,
+  Copy,
   Download,
+  FlipHorizontal2,
+  FlipVertical2,
   ImagePlus,
+  Pencil,
+  Plus,
   Redo2,
   RotateCcw,
   RotateCw,
   Sun,
-  Undo2,
   Thermometer,
+  Trash2,
+  Undo2,
   X,
 } from "lucide-react";
-import { ADJUSTMENTS, FILTERS } from "./filters.js";
+import {
+  ADJUSTMENTS,
+  ADJUSTMENT_GROUPS,
+  createHsl,
+  FILTERS,
+  HSL_CHANNELS,
+  HSL_CONTROLS,
+  isHslNeutral,
+  SPLIT_TONE_CONTROLS,
+} from "./filters.js";
 import {
   getCropGeometry,
   renderFiltered,
   renderFilteredAsync,
   resolveRecipe,
 } from "./image-processing.js";
+import {
+  fileToPersistableUrl,
+  loadPresets,
+  loadSession,
+  savePresets,
+  saveSession,
+} from "./storage.js";
 
 const DEMO_URL = import.meta.env.DEV
   ? "/tests/fixtures/demo-user-provided.webp"
   : null;
+const THUMB_INTENSITY = 72;
 const INITIAL_CROP = {
   ratio: "original",
   zoom: 1,
   offsetX: 0,
   offsetY: 0,
   rotation: 0,
+  straighten: 0,
+  flipH: false,
+  flipV: false,
 };
 const ZERO_RECIPE = Object.fromEntries(
   Object.keys(FILTERS[0].recipe).map((key) => [key, 0]),
@@ -47,6 +74,14 @@ const QUICK_SETTINGS = [
   { key: "contrast", label: "Contrast", Icon: Contrast },
   { key: "grain", label: "Grain", Icon: Aperture },
 ];
+const ADJUST_TABS = [
+  ...ADJUSTMENT_GROUPS,
+  { id: "grade", label: "Grade" },
+  { id: "hsl", label: "HSL" },
+];
+const pad = (value) => String(value).padStart(2, "0");
+const tierLabel = (tier) =>
+  tier === "pro" ? "Pro" : tier === "custom" ? "Saved" : "Free";
 
 function LogoMark() {
   return (
@@ -68,13 +103,17 @@ function App() {
   );
   const [selectedId, setSelectedId] = useState(FILTERS[0].id);
   const [recipe, setRecipe] = useState({ ...FILTERS[0].recipe });
-  const [intensity, setIntensity] = useState(72);
+  const [intensity, setIntensity] = useState(THUMB_INTENSITY);
   const [crop, setCrop] = useState({ ...INITIAL_CROP });
+  const [hsl, setHsl] = useState(createHsl);
+  const [customPresets, setCustomPresets] = useState([]);
   const [historyFlags, setHistoryFlags] = useState({
     canUndo: false,
     canRedo: false,
   });
   const [tab, setTab] = useState("filters");
+  const [adjustGroup, setAdjustGroup] = useState("light");
+  const [hslChannel, setHslChannel] = useState(HSL_CHANNELS[0].id);
   const [compare, setCompare] = useState(false);
   const [dragging, setDragging] = useState(false);
   const [exportOpen, setExportOpen] = useState(false);
@@ -87,22 +126,39 @@ function App() {
   const [toast, setToast] = useState("");
   const [loading, setLoading] = useState(true);
   const [thumbnails, setThumbnails] = useState({});
+  const [clipboard, setClipboard] = useState(null);
+  const [presetDialog, setPresetDialog] = useState(null);
   const canvasRef = useRef(null);
   const originalCanvasRef = useRef(null);
   const inputRef = useRef(null);
   const exportSheetRef = useRef(null);
+  const presetNameRef = useRef(null);
   const loadSequence = useRef(0);
   const currentObjectUrl = useRef(null);
+  const persistedPhoto = useRef(null);
   const historyRef = useRef({ past: [], future: [] });
   const historyTransaction = useRef(false);
   const cropDrag = useRef(null);
+  const thumbToken = useRef(0);
+  const keyHandlerRef = useRef(() => {});
+  const keyUpHandlerRef = useRef(() => {});
+  const notifiedStorage = useRef(false);
+
+  const allFilters = useMemo(
+    () => [...FILTERS, ...customPresets],
+    [customPresets],
+  );
   const activeFilter = useMemo(
-    () => FILTERS.find((filter) => filter.id === selectedId) ?? FILTERS[0],
-    [selectedId],
+    () => allFilters.find((filter) => filter.id === selectedId) ?? allFilters[0],
+    [allFilters, selectedId],
   );
   const effectiveRecipe = useMemo(
     () => resolveRecipe(activeFilter.recipe, recipe, intensity),
     [activeFilter, recipe, intensity],
+  );
+  const effectiveHsl = useMemo(
+    () => (isHslNeutral(hsl) ? null : hsl),
+    [hsl],
   );
   const cropGeometry = useMemo(
     () =>
@@ -112,27 +168,113 @@ function App() {
     [image, crop],
   );
 
+  // ── Loading: restore a saved session first, otherwise fall back to the demo.
   useEffect(() => {
+    let cancelled = false;
+    const session = loadSession();
+    const storedPresets = loadPresets();
+    if (storedPresets.length) setCustomPresets(storedPresets);
+
+    if (session && typeof session === "object") {
+      if (session.recipe && typeof session.recipe === "object") {
+        setRecipe({ ...FILTERS[0].recipe, ...session.recipe });
+      }
+      if (typeof session.selectedId === "string") {
+        setSelectedId(session.selectedId);
+      }
+      if (typeof session.intensity === "number") {
+        setIntensity(session.intensity);
+      }
+      if (session.crop && typeof session.crop === "object") {
+        setCrop({ ...INITIAL_CROP, ...session.crop });
+      }
+      if (session.hsl && typeof session.hsl === "object") {
+        setHsl({ ...createHsl(), ...session.hsl });
+      }
+      if (session.history && Array.isArray(session.history.past)) {
+        historyRef.current = {
+          past: session.history.past.slice(-40),
+          future: Array.isArray(session.history.future)
+            ? session.history.future.slice(-40)
+            : [],
+        };
+      }
+      if (session.photoUrl) {
+        persistedPhoto.current = session.photoUrl;
+        const restored = new Image();
+        restored.onload = () => {
+          if (cancelled) return;
+          setPhotoUrl(session.photoUrl);
+          setPhotoName(session.photoName || "Restored photo");
+          setImage(restored);
+          setLoading(false);
+        };
+        restored.onerror = () => {
+          if (!cancelled) setLoading(false);
+        };
+        restored.src = session.photoUrl;
+        return () => {
+          cancelled = true;
+        };
+      }
+    }
+
     if (!DEMO_URL) {
       setLoading(false);
-      return undefined;
+      return () => {
+        cancelled = true;
+      };
     }
     const requestId = ++loadSequence.current;
     const demo = new Image();
     demo.onload = () => {
-      if (requestId !== loadSequence.current) return;
+      if (cancelled || requestId !== loadSequence.current) return;
       setImage(demo);
       setLoading(false);
     };
     demo.onerror = () => setLoading(false);
     demo.src = DEMO_URL;
     return () => {
+      cancelled = true;
       loadSequence.current += 1;
       if (currentObjectUrl.current)
         URL.revokeObjectURL(currentObjectUrl.current);
     };
   }, []);
 
+  // ── Autosave to localStorage (settings + small photos only).
+  useEffect(() => {
+    if (loading) return undefined;
+    const snapshot = () => ({
+      version: 1,
+      photoUrl: persistedPhoto.current,
+      photoName,
+      selectedId,
+      recipe,
+      intensity,
+      crop,
+      hsl,
+      history: {
+        past: historyRef.current.past.slice(-40),
+        future: historyRef.current.future.slice(-40),
+      },
+    });
+    const flush = () => {
+      if (!saveSession(snapshot()) && !notifiedStorage.current) {
+        notifiedStorage.current = true;
+        notify("This browser could not remember your session.");
+      }
+    };
+    const timer = window.setTimeout(flush, 400);
+    // A reload can happen inside the debounce window, so flush on the way out.
+    window.addEventListener("pagehide", flush);
+    return () => {
+      window.clearTimeout(timer);
+      window.removeEventListener("pagehide", flush);
+    };
+  }, [loading, photoName, selectedId, recipe, intensity, crop, hsl, historyFlags]);
+
+  // ── Preview render.
   useEffect(() => {
     if (!image || !canvasRef.current || !originalCanvasRef.current) return;
     const timer = window.setTimeout(() => {
@@ -144,35 +286,61 @@ function App() {
           1500,
           crop,
         );
-        renderFiltered(image, canvasRef.current, effectiveRecipe, 1500, crop);
+        renderFiltered(
+          image,
+          canvasRef.current,
+          effectiveRecipe,
+          1500,
+          crop,
+          effectiveHsl,
+        );
       } catch (error) {
         console.error("Could not preview this image", error);
         notify("This photo is too large to preview in this browser.");
       }
     }, 20);
     return () => window.clearTimeout(timer);
-  }, [image, effectiveRecipe, crop]);
+  }, [image, effectiveRecipe, effectiveHsl, crop]);
 
+  // ── Thumbnails are generated one at a time so a large library never blocks.
   useEffect(() => {
     if (!image) return undefined;
-    const timer = window.setTimeout(() => {
-      const nextThumbnails = Object.fromEntries(
-        FILTERS.map((filter) => {
-          const thumbnail = document.createElement("canvas");
-          renderFiltered(
-            image,
-            thumbnail,
-            resolveRecipe(filter.recipe, filter.recipe, 72),
-            180,
-            crop,
-          );
-          return [filter.id, thumbnail.toDataURL("image/png")];
-        }),
-      );
-      setThumbnails(nextThumbnails);
-    }, 30);
-    return () => window.clearTimeout(timer);
-  }, [image, crop]);
+    const token = ++thumbToken.current;
+    const gallery = [...FILTERS, ...customPresets];
+    const cache = {};
+    let index = 0;
+    let timer;
+
+    const pump = () => {
+      if (token !== thumbToken.current) return;
+      if (index >= gallery.length) return;
+      const filter = gallery[index];
+      index += 1;
+      try {
+        const thumbnail = document.createElement("canvas");
+        renderFiltered(
+          image,
+          thumbnail,
+          resolveRecipe(filter.recipe, filter.recipe, THUMB_INTENSITY),
+          180,
+          crop,
+          filter.hsl ?? null,
+        );
+        cache[filter.id] = thumbnail.toDataURL("image/png");
+      } catch {
+        /* skip a thumbnail that cannot be rendered */
+      }
+      setThumbnails({ ...cache });
+      timer = window.setTimeout(pump, 24);
+    };
+
+    setThumbnails({});
+    timer = window.setTimeout(pump, 40);
+    return () => {
+      window.clearTimeout(timer);
+      thumbToken.current += 1;
+    };
+  }, [image, crop, customPresets]);
 
   useEffect(() => {
     if (!toast) return undefined;
@@ -213,12 +381,102 @@ function App() {
     };
   }, [exportOpen]);
 
+  useEffect(() => {
+    if (!presetDialog) return undefined;
+    const previousFocus = document.activeElement;
+    window.setTimeout(() => {
+      presetNameRef.current?.focus();
+      presetNameRef.current?.select();
+    }, 30);
+    function onKeyDown(event) {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        setPresetDialog(null);
+      }
+    }
+    document.addEventListener("keydown", onKeyDown);
+    return () => {
+      document.removeEventListener("keydown", onKeyDown);
+      previousFocus?.focus?.();
+    };
+  }, [presetDialog]);
+
+  // ── Keyboard shortcuts. Handlers live in refs so the listener stays attached.
+  keyHandlerRef.current = (event) => {
+    const target = event.target;
+    const typing =
+      target &&
+      (target.tagName === "INPUT" ||
+        target.tagName === "TEXTAREA" ||
+        target.isContentEditable);
+    const mod = event.ctrlKey || event.metaKey;
+
+    if (mod && event.key.toLowerCase() === "z") {
+      event.preventDefault();
+      if (event.shiftKey) redoEdit();
+      else undoEdit();
+      return;
+    }
+    if (mod && event.key.toLowerCase() === "y") {
+      event.preventDefault();
+      redoEdit();
+      return;
+    }
+    if (mod && event.key.toLowerCase() === "s") {
+      event.preventDefault();
+      if (image && !exporting) setExportOpen(true);
+      return;
+    }
+    if (exportOpen || presetDialog || typing || mod) return;
+
+    if (event.key === " " && tab !== "crop") {
+      event.preventDefault();
+      setCompare(true);
+      return;
+    }
+    if (event.key === "1") {
+      event.preventDefault();
+      setTab("filters");
+      return;
+    }
+    if (event.key === "2") {
+      event.preventDefault();
+      setTab("crop");
+      return;
+    }
+    if (event.key === "3") {
+      event.preventDefault();
+      setTab("adjust");
+    }
+  };
+
+  keyUpHandlerRef.current = (event) => {
+    if (event.key === " ") setCompare(false);
+  };
+
+  useEffect(() => {
+    const onDown = (event) => keyHandlerRef.current(event);
+    const onUp = (event) => keyUpHandlerRef.current(event);
+    document.addEventListener("keydown", onDown);
+    document.addEventListener("keyup", onUp);
+    return () => {
+      document.removeEventListener("keydown", onDown);
+      document.removeEventListener("keyup", onUp);
+    };
+  }, []);
+
   function notify(message) {
     setToast(message);
   }
 
   function captureEdit() {
-    return { selectedId, recipe: { ...recipe }, intensity, crop: { ...crop } };
+    return {
+      selectedId,
+      recipe: { ...recipe },
+      intensity,
+      crop: { ...crop },
+      hsl: { ...hsl },
+    };
   }
 
   function syncHistoryFlags() {
@@ -264,6 +522,7 @@ function App() {
     setRecipe({ ...edit.recipe });
     setIntensity(edit.intensity);
     setCrop({ ...edit.crop });
+    setHsl({ ...createHsl(), ...edit.hsl });
   }
 
   function undoEdit() {
@@ -303,6 +562,15 @@ function App() {
       rotation: (previous.rotation + direction + 360) % 360,
       offsetX: 0,
       offsetY: 0,
+    }));
+  }
+
+  function flipCrop(axis) {
+    recordEdit();
+    setCrop((previous) => ({
+      ...previous,
+      [axis === "horizontal" ? "flipH" : "flipV"]:
+        !(axis === "horizontal" ? previous.flipH : previous.flipV),
     }));
   }
 
@@ -363,11 +631,12 @@ function App() {
     endHistoryTransaction();
   }
 
-  function chooseFilter(filter) {
+  function startPreset(filter) {
     recordEdit();
     setSelectedId(filter.id);
     setRecipe({ ...filter.recipe });
-    setIntensity(72);
+    setIntensity(filter.tier === "custom" ? 100 : THUMB_INTENSITY);
+    setHsl(filter.hsl ? { ...createHsl(), ...filter.hsl } : createHsl());
   }
 
   function loadFile(file) {
@@ -378,6 +647,10 @@ function App() {
     }
     const requestId = ++loadSequence.current;
     const nextUrl = URL.createObjectURL(file);
+    persistedPhoto.current = null;
+    fileToPersistableUrl(file).then((dataUrl) => {
+      if (requestId === loadSequence.current) persistedPhoto.current = dataUrl;
+    });
     const nextImage = new Image();
     nextImage.onload = () => {
       if (requestId !== loadSequence.current) {
@@ -424,15 +697,31 @@ function App() {
     setRecipe((previous) => ({ ...previous, [key]: Number(value) }));
   }
 
+  function updateSplit(key, value) {
+    beginHistoryTransaction();
+    setRecipe((previous) => ({ ...previous, [key]: Number(value) }));
+  }
+
+  function updateHsl(channel, key, value) {
+    beginHistoryTransaction();
+    setHsl((previous) => ({
+      ...previous,
+      [channel]: { ...previous[channel], [key]: Number(value) },
+    }));
+  }
+
   function resetRecipe() {
     recordEdit();
     setRecipe({ ...activeFilter.recipe });
-    setIntensity(72);
+    setIntensity(activeFilter.tier === "custom" ? 100 : THUMB_INTENSITY);
+    setHsl(activeFilter.hsl ? { ...createHsl(), ...activeFilter.hsl } : createHsl());
     notify("Back to the original recipe.");
   }
 
   function openAdjust(key) {
+    const adjustment = ADJUSTMENTS.find((item) => item.key === key);
     setTab("adjust");
+    setAdjustGroup(adjustment?.group ?? "light");
     window.setTimeout(
       () =>
         document
@@ -440,6 +729,69 @@ function App() {
           ?.scrollIntoView({ behavior: "smooth", block: "nearest" }),
       80,
     );
+  }
+
+  function copyEdits() {
+    setClipboard({
+      recipe: { ...recipe },
+      hsl: { ...hsl },
+      crop: { ...crop },
+      intensity,
+    });
+    notify("Edit copied — paste it onto another photo.");
+  }
+
+  function pasteEdits() {
+    if (!clipboard) return;
+    recordEdit();
+    setRecipe({ ...clipboard.recipe });
+    setHsl({ ...createHsl(), ...clipboard.hsl });
+    setCrop({ ...clipboard.crop });
+    setIntensity(clipboard.intensity);
+    notify("Edit pasted.");
+  }
+
+  function saveCurrentAsPreset(name) {
+    const trimmed = name.trim();
+    if (!trimmed) return;
+    const preset = {
+      id: `custom-${Date.now().toString(36)}`,
+      code: trimmed,
+      name: trimmed,
+      mood: "Your saved look",
+      tier: "custom",
+      swatch: "#cfc7b4",
+      recipe: { ...recipe },
+      hsl: { ...hsl },
+    };
+    const next = [...customPresets, preset];
+    setCustomPresets(next);
+    savePresets(next);
+    setSelectedId(preset.id);
+    setPresetDialog(null);
+    notify(`Saved “${trimmed}”.`);
+  }
+
+  function renamePreset(id, name) {
+    const trimmed = name.trim();
+    if (!trimmed) return;
+    const next = customPresets.map((preset) =>
+      preset.id === id
+        ? { ...preset, code: trimmed, name: trimmed }
+        : preset,
+    );
+    setCustomPresets(next);
+    savePresets(next);
+    setPresetDialog(null);
+    notify("Preset renamed.");
+  }
+
+  function deletePreset(id) {
+    const next = customPresets.filter((preset) => preset.id !== id);
+    setCustomPresets(next);
+    savePresets(next);
+    if (selectedId === id) startPreset(FILTERS[0]);
+    notify("Preset deleted.");
   }
 
   async function exportImage() {
@@ -458,6 +810,7 @@ function App() {
         maxEdge,
         (progress) => notify(`Processing locally… ${progress}%`),
         crop,
+        effectiveHsl,
       );
       const mime = exportFormat === "png" ? "image/png" : "image/jpeg";
       const quality = exportFormat === "png" ? undefined : 0.94;
@@ -488,9 +841,10 @@ function App() {
     }
   }
 
-  const aspectLabel = cropGeometry
-    ? `${cropGeometry.ratio > 1.04 ? "Landscape" : cropGeometry.ratio < 0.96 ? "Portrait" : "Square"} · ${crop.ratio === "original" ? `Original · ${simplifyRatio(cropGeometry.width, cropGeometry.height)}` : crop.ratio}`
+  const aspectLabel = cropGeometry    ? `${cropGeometry.ratio > 1.04 ? "Landscape" : cropGeometry.ratio < 0.96 ? "Portrait" : "Square"} · ${crop.ratio === "original" ? `Original · ${simplifyRatio(cropGeometry.width, cropGeometry.height)}` : crop.ratio}`
     : "Portrait · Original";
+  const presetIndex = allFilters.findIndex((filter) => filter.id === selectedId);
+  const activeHsl = hsl[hslChannel];
 
   return (
     <div className="app-shell" onDragOver={(event) => event.preventDefault()}>
@@ -518,7 +872,7 @@ function App() {
               className="history-button"
               type="button"
               aria-label="Undo"
-              title="Undo"
+              title="Undo (Ctrl+Z)"
               disabled={!historyFlags.canUndo}
               onClick={undoEdit}
             >
@@ -528,7 +882,7 @@ function App() {
               className="history-button"
               type="button"
               aria-label="Redo"
-              title="Redo"
+              title="Redo (Ctrl+Shift+Z)"
               disabled={!historyFlags.canRedo}
               onClick={redoEdit}
             >
@@ -656,11 +1010,20 @@ function App() {
           <div className="filter-heading">
             <div>
               <div className="eyebrow">
-                SIGNATURE&nbsp;{" "}
-                {String(
-                  FILTERS.findIndex((filter) => filter.id === selectedId) + 1,
-                ).padStart(2, "0")}{" "}
-                / 08
+                <span
+                  className={`tier-chip tier-${activeFilter.tier}`}
+                  title={
+                    activeFilter.tier === "pro"
+                      ? "A subscription look in VSCO — free here"
+                      : activeFilter.tier === "custom"
+                        ? "Your saved look"
+                        : "A free VSCO look"
+                  }
+                >
+                  {tierLabel(activeFilter.tier)}
+                </span>
+                PRESET&nbsp; {pad(Math.max(presetIndex + 1, 1))} /{" "}
+                {pad(allFilters.length)}
               </div>
               <h1>{activeFilter.name}</h1>
               <p>{activeFilter.mood}</p>
@@ -685,6 +1048,7 @@ function App() {
               onKeyUp={endHistoryTransaction}
               onBlur={endHistoryTransaction}
               style={{ "--range-fill": `${intensity}%` }}
+              aria-valuetext={`${intensity}%`}
             />
             <output>{intensity}%</output>
           </label>
@@ -719,15 +1083,19 @@ function App() {
             <button
               type="button"
               role="tab"
+              id="tab-filters"
+              aria-controls="panel-filters"
               aria-selected={tab === "filters"}
               className={tab === "filters" ? "active" : ""}
               onClick={() => setTab("filters")}
             >
-              Filters
+              Presets
             </button>
             <button
               type="button"
               role="tab"
+              id="tab-crop"
+              aria-controls="panel-crop"
               aria-selected={tab === "crop"}
               className={tab === "crop" ? "active" : ""}
               onClick={() => setTab("crop")}
@@ -737,11 +1105,40 @@ function App() {
             <button
               type="button"
               role="tab"
+              id="tab-adjust"
+              aria-controls="panel-adjust"
               aria-selected={tab === "adjust"}
               className={tab === "adjust" ? "active" : ""}
               onClick={() => setTab("adjust")}
             >
               Adjust
+            </button>
+          </div>
+
+          <div className="edit-actions">
+            <button
+              type="button"
+              className="edit-action"
+              onClick={copyEdits}
+              disabled={!image}
+            >
+              <Copy size={14} /> Copy edit
+            </button>
+            <button
+              type="button"
+              className="edit-action"
+              onClick={pasteEdits}
+              disabled={!clipboard}
+            >
+              <ClipboardPaste size={14} /> Paste
+            </button>
+            <button
+              type="button"
+              className="edit-action"
+              onClick={() => setPresetDialog({ mode: "save" })}
+              disabled={!image}
+            >
+              <Plus size={14} /> Save look
             </button>
             {tab === "adjust" && (
               <button
@@ -753,75 +1150,283 @@ function App() {
               </button>
             )}
           </div>
+
           {tab === "filters" ? (
             <div
               className="filter-strip"
-              role="group"
-              aria-label="Signature filters"
+              id="panel-filters"
+              role="tabpanel"
+              aria-label="Presets"
+              aria-labelledby="tab-filters"
             >
-              {FILTERS.map((filter) => (
-                <button
-                  className={`filter-card ${selectedId === filter.id ? "selected" : ""}`}
-                  type="button"
-                  key={filter.id}
-                  aria-pressed={selectedId === filter.id}
-                  onClick={() => chooseFilter(filter)}
-                >
-                  <span className={`filter-thumb ${filter.swatch}`}>
-                    <img
-                      src={thumbnails[filter.id] || photoUrl}
-                      alt=""
-                      draggable="false"
-                    />
-                    {selectedId === filter.id && (
-                      <span className="selected-check">
-                        <Check size={12} strokeWidth={2.4} />
+              {allFilters.map((filter) => (
+                <div className="filter-item" key={filter.id}>
+                  <button
+                    className={`filter-card ${selectedId === filter.id ? "selected" : ""}`}
+                    type="button"
+                    aria-label={filter.name}
+                    aria-pressed={selectedId === filter.id}
+                    onClick={() => startPreset(filter)}
+                  >
+                    <span
+                      className="filter-thumb"
+                      style={filter.swatch ? { background: filter.swatch } : undefined}
+                    >
+                      <img
+                        src={thumbnails[filter.id] || photoUrl}
+                        alt=""
+                        draggable="false"
+                      />
+                      <span
+                        className={`tier-badge tier-${filter.tier}`}
+                        aria-hidden="true"
+                      >
+                        {tierLabel(filter.tier)}
                       </span>
-                    )}
-                  </span>
-                  <span className="filter-card-label">{filter.name}</span>
-                </button>
+                      {selectedId === filter.id && (
+                        <span className="selected-check">
+                          <Check size={12} strokeWidth={2.4} />
+                        </span>
+                      )}
+                    </span>
+                    <span className="filter-card-label">{filter.name}</span>
+                  </button>
+                  {filter.tier === "custom" && (
+                    <div className="preset-tools">
+                      <button
+                        type="button"
+                        aria-label={`Rename ${filter.name}`}
+                        onClick={() =>
+                          setPresetDialog({
+                            mode: "rename",
+                            id: filter.id,
+                            value: filter.name,
+                          })
+                        }
+                      >
+                        <Pencil size={12} />
+                      </button>
+                      <button
+                        type="button"
+                        aria-label={`Delete ${filter.name}`}
+                        onClick={() => deletePreset(filter.id)}
+                      >
+                        <Trash2 size={12} />
+                      </button>
+                    </div>
+                  )}
+                </div>
               ))}
             </div>
           ) : tab === "adjust" ? (
-            <div className="adjustment-grid">
-              {ADJUSTMENTS.map((adjustment) => {
-                const value = recipe[adjustment.key];
-                const progress =
-                  ((value - adjustment.min) /
-                    (adjustment.max - adjustment.min)) *
-                  100;
-                return (
-                  <label
-                    className="adjustment-control"
-                    id={`adjust-${adjustment.key}`}
-                    key={adjustment.key}
+            <div
+              className="adjust-panel"
+              role="tabpanel"
+              id="panel-adjust"
+              aria-labelledby="tab-adjust"
+            >
+              <div
+                className="subtabs"
+                role="group"
+                aria-label="Adjustment groups"
+              >
+                {ADJUST_TABS.map((group) => (
+                  <button
+                    key={group.id}
+                    type="button"
+                    className={`subtab ${adjustGroup === group.id ? "active" : ""}`}
+                    aria-pressed={adjustGroup === group.id}
+                    onClick={() => setAdjustGroup(group.id)}
                   >
-                    <span className="adjustment-label">{adjustment.label}</span>
-                    <output>{adjustment.display(value)}</output>
-                    <input
-                      type="range"
-                      min={adjustment.min}
-                      max={adjustment.max}
-                      step={adjustment.step}
-                      value={value}
-                      onChange={(event) =>
-                        updateAdjustment(adjustment.key, event.target.value)
-                      }
-                      onPointerDown={beginHistoryTransaction}
-                      onKeyDown={beginHistoryTransaction}
-                      onPointerUp={endHistoryTransaction}
-                      onKeyUp={endHistoryTransaction}
-                      onBlur={endHistoryTransaction}
-                      style={{ "--range-fill": `${progress}%` }}
-                      aria-label={adjustment.label}
-                    />
-                  </label>
-                );
-              })}
+                    {group.label}
+                  </button>
+                ))}
+              </div>
+
+              {adjustGroup === "hsl" ? (
+                <div className="hsl-panel">
+                  <div
+                    className="hsl-channels"
+                    role="group"
+                    aria-label="HSL color channel"
+                  >
+                    {HSL_CHANNELS.map((channel) => (
+                      <button
+                        key={channel.id}
+                        type="button"
+                        className={`hsl-channel ${hslChannel === channel.id ? "active" : ""}`}
+                        aria-pressed={hslChannel === channel.id}
+                        onClick={() => setHslChannel(channel.id)}
+                      >
+                        <span
+                          className="hsl-swatch"
+                          style={{ background: channel.swatch }}
+                        />
+                        {channel.label}
+                      </button>
+                    ))}
+                  </div>
+                  <div className="adjustment-grid">
+                    {HSL_CONTROLS.map((control) => {
+                      const value = activeHsl[control.key];
+                      const progress =
+                        ((value - control.min) /
+                          (control.max - control.min)) *
+                        100;
+                      return (
+                        <label
+                          className="adjustment-control"
+                          id={`hsl-${hslChannel}-${control.key}`}
+                          key={control.key}
+                        >
+                          <span className="adjustment-label">
+                            {control.label}
+                          </span>
+                          <output>
+                            {value > 0 ? "+" : ""}
+                            {value}
+                          </output>
+                          <input
+                            type="range"
+                            min={control.min}
+                            max={control.max}
+                            step={control.step}
+                            value={value}
+                            onChange={(event) =>
+                              updateHsl(
+                                hslChannel,
+                                control.key,
+                                event.target.value,
+                              )
+                            }
+                            onPointerDown={beginHistoryTransaction}
+                            onKeyDown={beginHistoryTransaction}
+                            onPointerUp={endHistoryTransaction}
+                            onKeyUp={endHistoryTransaction}
+                            onBlur={endHistoryTransaction}
+                            style={{ "--range-fill": `${progress}%` }}
+                            aria-label={`${hslChannel} ${control.label}`}
+                            aria-valuetext={`${value > 0 ? "+" : ""}${value}`}
+                          />
+                        </label>
+                      );
+                    })}
+                  </div>
+                </div>
+              ) : adjustGroup === "grade" ? (
+                <div className="adjustment-grid grade-grid">
+                  {SPLIT_TONE_CONTROLS.map((control) => {
+                    const strength = recipe[control.key];
+                    const hue = recipe[control.hueKey];
+                    return (
+                      <div className="split-control" key={control.key}>
+                        <label className="adjustment-control">
+                          <span className="adjustment-label">
+                            {control.label}
+                          </span>
+                          <output>{strength}</output>
+                          <input
+                            type="range"
+                            min={control.min}
+                            max={control.max}
+                            step={control.step}
+                            value={strength}
+                            onChange={(event) =>
+                              updateSplit(control.key, event.target.value)
+                            }
+                            onPointerDown={beginHistoryTransaction}
+                            onKeyDown={beginHistoryTransaction}
+                            onPointerUp={endHistoryTransaction}
+                            onKeyUp={endHistoryTransaction}
+                            onBlur={endHistoryTransaction}
+                            style={{
+                              "--range-fill": `${(strength / 100) * 100}%`,
+                            }}
+                            aria-label={control.label}
+                            aria-valuetext={`${strength}`}
+                          />
+                        </label>
+                        <label className="adjustment-control hue-control">
+                          <span className="adjustment-label">Hue</span>
+                          <output>{hue}&deg;</output>
+                          <input
+                            type="range"
+                            min="0"
+                            max="359"
+                            step="1"
+                            value={hue}
+                            onChange={(event) =>
+                              updateSplit(control.hueKey, event.target.value)
+                            }
+                            onPointerDown={beginHistoryTransaction}
+                            onKeyDown={beginHistoryTransaction}
+                            onPointerUp={endHistoryTransaction}
+                            onKeyUp={endHistoryTransaction}
+                            onBlur={endHistoryTransaction}
+                            className="hue-range"
+                            style={{ "--range-fill": `${(hue / 359) * 100}%` }}
+                            aria-label={`${control.label} hue`}
+                            aria-valuetext={`${hue} degrees`}
+                          />
+                        </label>
+                      </div>
+                    );
+                  })}
+                </div>
+              ) : (
+                <div className="adjustment-grid">
+                  {ADJUSTMENTS.filter(
+                    (adjustment) => adjustment.group === adjustGroup,
+                  ).map((adjustment) => {
+                    const value = recipe[adjustment.key];
+                    const progress =
+                      ((value - adjustment.min) /
+                        (adjustment.max - adjustment.min)) *
+                      100;
+                    return (
+                      <label
+                        className="adjustment-control"
+                        id={`adjust-${adjustment.key}`}
+                        key={adjustment.key}
+                      >
+                        <span className="adjustment-label">
+                          {adjustment.label}
+                        </span>
+                        <output>{adjustment.display(value)}</output>
+                        <input
+                          type="range"
+                          min={adjustment.min}
+                          max={adjustment.max}
+                          step={adjustment.step}
+                          value={value}
+                          onChange={(event) =>
+                            updateAdjustment(
+                              adjustment.key,
+                              event.target.value,
+                            )
+                          }
+                          onPointerDown={beginHistoryTransaction}
+                          onKeyDown={beginHistoryTransaction}
+                          onPointerUp={endHistoryTransaction}
+                          onKeyUp={endHistoryTransaction}
+                          onBlur={endHistoryTransaction}
+                          style={{ "--range-fill": `${progress}%` }}
+                          aria-label={adjustment.label}
+                          aria-valuetext={adjustment.display(value)}
+                        />
+                      </label>
+                    );
+                  })}
+                </div>
+              )}
             </div>
           ) : (
-            <div className="crop-panel">
+            <div
+              className="crop-panel"
+              role="tabpanel"
+              id="panel-crop"
+              aria-labelledby="tab-crop"
+            >
               <div className="crop-section-label">FRAME</div>
               <div
                 className="crop-ratios"
@@ -861,12 +1466,57 @@ function App() {
                 </button>
                 <button
                   type="button"
+                  className="crop-tool-button"
+                  aria-label="Flip horizontally"
+                  aria-pressed={crop.flipH}
+                  onClick={() => flipCrop("horizontal")}
+                >
+                  <FlipHorizontal2 size={17} />
+                  <span>Flip H</span>
+                </button>
+                <button
+                  type="button"
+                  className="crop-tool-button"
+                  aria-label="Flip vertically"
+                  aria-pressed={crop.flipV}
+                  onClick={() => flipCrop("vertical")}
+                >
+                  <FlipVertical2 size={17} />
+                  <span>Flip V</span>
+                </button>
+                <button
+                  type="button"
                   className="reset-button crop-reset"
                   onClick={resetCrop}
                 >
                   Reset framing
                 </button>
               </div>
+              <label className="crop-zoom" htmlFor="crop-straighten-range">
+                <span>Straighten</span>
+                <input
+                  id="crop-straighten-range"
+                  type="range"
+                  min="-45"
+                  max="45"
+                  step="0.5"
+                  value={crop.straighten}
+                  aria-label="Straighten"
+                  aria-valuetext={`${crop.straighten} degrees`}
+                  onChange={(event) =>
+                    updateCrop("straighten", Number(event.target.value))
+                  }
+                  onPointerDown={beginHistoryTransaction}
+                  onKeyDown={beginHistoryTransaction}
+                  onPointerUp={endHistoryTransaction}
+                  onKeyUp={endHistoryTransaction}
+                  onBlur={endHistoryTransaction}
+                  style={{
+                    "--range-fill": `${((crop.straighten + 45) / 90) * 100}%`,
+                  }}
+                />
+                <output>{crop.straighten.toFixed(1)}&deg;</output>
+              </label>
               <label className="crop-zoom" htmlFor="crop-zoom-range">
                 <span>Zoom</span>
                 <input
@@ -877,6 +1527,7 @@ function App() {
                   step="0.01"
                   value={crop.zoom}
                   aria-label="Crop zoom"
+                  aria-valuetext={`${crop.zoom.toFixed(2)} times`}
                   onChange={(event) =>
                     updateCrop("zoom", Number(event.target.value))
                   }
@@ -927,6 +1578,84 @@ function App() {
       {toast && (
         <div className="toast" role="status">
           {toast}
+        </div>
+      )}
+
+      {presetDialog && (
+        <div
+          className="modal-backdrop"
+          role="presentation"
+          onClick={() => setPresetDialog(null)}
+        >
+          <section
+            className="export-sheet preset-sheet"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="preset-title"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <div className="sheet-grab" />
+            <div className="sheet-heading">
+              <div>
+                <span className="eyebrow">
+                  {presetDialog.mode === "rename" ? "RENAME" : "KEEP THIS LOOK"}
+                </span>
+                <h2 id="preset-title">
+                  {presetDialog.mode === "rename"
+                    ? "Rename preset"
+                    : "Save this look"}
+                </h2>
+              </div>
+              <button
+                type="button"
+                className="close-sheet"
+                onClick={() => setPresetDialog(null)}
+                aria-label="Close preset dialog"
+              >
+                <X size={20} />
+              </button>
+            </div>
+            <p className="sheet-description">
+              Saved looks appear alongside the built-in presets and stay in this
+              browser.
+            </p>
+            <label className="preset-name-field">
+              <span>Preset name</span>
+              <input
+                ref={presetNameRef}
+                type="text"
+                defaultValue={presetDialog.value || ""}
+                maxLength={28}
+                placeholder="Morning window"
+                onKeyDown={(event) => {
+                  if (event.key !== "Enter") return;
+                  event.preventDefault();
+                  if (presetDialog.mode === "rename") {
+                    renamePreset(presetDialog.id, event.currentTarget.value);
+                  } else {
+                    saveCurrentAsPreset(event.currentTarget.value);
+                  }
+                }}
+              />
+            </label>
+            <button
+              className="confirm-export"
+              type="button"
+              onClick={(event) => {
+                const input = event.currentTarget.parentElement.querySelector(
+                  ".preset-name-field input",
+                );
+                if (presetDialog.mode === "rename") {
+                  renamePreset(presetDialog.id, input?.value ?? "");
+                } else {
+                  saveCurrentAsPreset(input?.value ?? "");
+                }
+              }}
+            >
+              <Check size={18} />
+              {presetDialog.mode === "rename" ? "Rename preset" : "Save look"}
+            </button>
+          </section>
         </div>
       )}
 

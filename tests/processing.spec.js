@@ -6,16 +6,16 @@ import {
   resolveRecipe,
 } from "../src/image-processing.js";
 
-test("crop geometry bounds supported aspect ratios and rotation", () => {
+test("crop geometry bounds supported aspect ratios, rotation, and straighten", () => {
   const square = getCropGeometry(1280, 800, { ratio: "1:1", zoom: 1 });
-  expect(square.width).toBe(800);
-  expect(square.height).toBe(800);
+  expect(square.width).toBeCloseTo(800, 6);
+  expect(square.height).toBeCloseTo(800, 6);
   const turned = getCropGeometry(1280, 800, {
     ratio: "original",
     rotation: 90,
   });
-  expect(turned.orientedWidth).toBe(800);
-  expect(turned.orientedHeight).toBe(1280);
+  expect(turned.orientedWidth).toBeCloseTo(800, 6);
+  expect(turned.orientedHeight).toBeCloseTo(1280, 6);
   expect(turned.ratio).toBeCloseTo(0.625);
   const zoomed = getCropGeometry(1280, 800, {
     ratio: "3:2",
@@ -26,6 +26,21 @@ test("crop geometry bounds supported aspect ratios and rotation", () => {
   expect(zoomed.width / zoomed.height).toBeCloseTo(1.5);
   expect(zoomed.left + zoomed.width).toBeLessThanOrEqual(1280);
   expect(zoomed.top).toBe(0);
+
+  // Straightening widens the bounding box, so the covered frame must shrink to
+  // avoid exposing empty canvas corners.
+  const straight = getCropGeometry(1280, 800, {
+    ratio: "original",
+    straighten: 10,
+  });
+  expect(straight.radians).toBeCloseTo((10 * Math.PI) / 180);
+  expect(straight.width).toBeLessThan(1280);
+  expect(straight.height).toBeLessThan(800);
+  const withinSource =
+    straight.width * Math.cos(straight.radians) +
+      straight.height * Math.sin(straight.radians) <=
+    1280 + 0.001;
+  expect(withinSource).toBe(true);
 });
 
 test("preset intensity does not dilute manual tweaks", () => {
@@ -39,15 +54,15 @@ test("preset intensity does not dilute manual tweaks", () => {
   const full = resolveRecipe(preset, tuned, 100);
   expect(zero.temp).toBe(10);
   expect(zero.exposure).toBeCloseTo(0.2);
-  expect(full.temp).toBe(15);
-  expect(full.exposure).toBeCloseTo(0.3);
+  expect(full.temp).toBeCloseTo(preset.temp + 10);
+  expect(full.exposure).toBeCloseTo(preset.exposure + 0.2);
   expect(resolveRecipe(preset, preset, 0)).toEqual(
     Object.fromEntries(Object.keys(preset).map((key) => [key, 0])),
   );
   expect(fittedSize(8000, 10000, 3200)).toEqual({ width: 2560, height: 3200 });
 });
 
-test("tiled export matches the preview engine and all nine controls alter pixels", async ({
+test("tiled export matches the preview engine and every control alters pixels", async ({
   page,
 }) => {
   await page.goto("/");
@@ -57,14 +72,18 @@ test("tiled export matches the preview engine and all nine controls alter pixels
   const result = await page.evaluate(async () => {
     const { renderFiltered, renderFilteredAsync, resolveRecipe } =
       await import("/src/image-processing.js");
-    const { FILTERS } = await import("/src/filters.js");
+    const { FILTERS, createHsl } = await import("/src/filters.js");
     const source = document.querySelector(".original-photo");
-    const preset = FILTERS[6].recipe;
+    const preset = FILTERS[5].recipe;
     const recipe = resolveRecipe(preset, preset, 72);
+    const hsl = {
+      ...createHsl(),
+      blue: { h: 20, s: 30, l: -10 },
+    };
     const sync = document.createElement("canvas");
     const tiled = document.createElement("canvas");
-    renderFiltered(source, sync, recipe, 400);
-    await renderFilteredAsync(source, tiled, recipe, 400);
+    renderFiltered(source, sync, recipe, 400, undefined, hsl);
+    await renderFilteredAsync(source, tiled, recipe, 400, () => {}, undefined, hsl);
     const first = sync
       .getContext("2d")
       .getImageData(0, 0, sync.width, sync.height).data;
@@ -81,12 +100,20 @@ test("tiled export matches the preview engine and all nine controls alter pixels
       exposure: 0.5,
       contrast: 30,
       saturation: 30,
+      vibrance: 40,
       temp: 30,
       tint: 30,
       highlights: -30,
       shadows: 30,
+      whites: 40,
+      blacks: -40,
+      clarity: 50,
+      sharpen: 50,
       fade: 30,
       grain: 30,
+      vignette: 60,
+      splitShadowStrength: 60,
+      splitHighlightStrength: 60,
     };
     const checksum = (canvas) => {
       const data = canvas
@@ -105,10 +132,20 @@ test("tiled export matches the preview engine and all nine controls alter pixels
         return [key, checksum(sync) !== original];
       }),
     );
-    return { differences, controls };
+    // Grain size is a modifier: it reshapes grain rather than adding its own.
+    renderFiltered(source, sync, { ...neutral, grain: 30 }, 180);
+    const fineGrain = checksum(sync);
+    renderFiltered(source, sync, { ...neutral, grain: 30, grainSize: 60 }, 180);
+    controls.grainSize = checksum(sync) !== fineGrain;
+    const hslPixels = (() => {
+      renderFiltered(source, sync, neutral, 180, undefined, hsl);
+      return checksum(sync) !== original;
+    })();
+    return { differences, controls, hslPixels };
   });
   expect(result.differences).toBe(0);
   expect(Object.values(result.controls).every(Boolean)).toBe(true);
+  expect(result.hslPixels).toBe(true);
 });
 
 test("invalid images fail gracefully and export dialog supports keyboard dismissal", async ({
