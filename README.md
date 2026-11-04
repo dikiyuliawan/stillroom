@@ -5,8 +5,8 @@ The visual direction follows the approved Stillroom mobile mockup: warm paper, o
 accents, a large photo preview, quiet typography, and a horizontal preset strip.
 
 Stillroom is a free, local alternative to a photo-editing subscription: 24 curated
-looks and the fine-tuning tools normally gated behind one, with no account, no upload,
-and no server.
+looks plus a neutral Original preset, and the fine-tuning tools normally gated behind
+one, with no account, no upload, and no server.
 
 ## Run it
 
@@ -28,9 +28,12 @@ The production bundle is generated in `dist/`. It has not been deployed or publi
 
 - Import a local JPG, PNG, WebP, or browser-supported AVIF; drag-and-drop also works.
 - Preview the full photo without cropping, including portrait, square, and landscape aspect ratios.
-- Hold the comparison button (or hold <kbd>Space</kbd>) to see the original.
-- Choose from **24 presets**, tagged **Free** or **Pro** to mirror the tiers of a
-  subscription editor — all unlocked locally. See `docs/filter-recipes.md`.
+- Press-and-hold the photo (or hold <kbd>Space</kbd>) to see the original.
+- Choose from **24 looks plus an Original preset**, tagged **Free** or **Pro** to
+  mirror the tiers of a subscription editor — all unlocked locally. See
+  `docs/filter-recipes.md`.
+- Compare against the untouched photo by selecting the first **Original** preset —
+  it applies no effect and starts every manual tweak from zero.
 - Adjust intensity and 16 controls across four groups:
   - **Light** — exposure, contrast, highlights, shadows, whites, blacks.
   - **Color** — temperature, tint, saturation, vibrance.
@@ -99,12 +102,12 @@ Run the dev server first. Tests use system Chromium when available; otherwise in
 Playwright browser with `npx playwright install chromium`. Set
 `PLAYWRIGHT_CHROMIUM_EXECUTABLE` to use a specific Chromium installation.
 
-The suite covers all 24 preset selections, intensity, pointer and keyboard comparison,
-every adjustment's pixel effect, split tone and HSL grading, crop ratios, zoom/pan,
-rotation, straighten, flip, undo/redo, saved presets, copy/paste, session restore,
-keyboard shortcuts, local import and aspect ratio, valid JPG/PNG downloads, invalid-image
-errors, dialog keyboard dismissal, and responsive overflow. Screenshots and export
-samples are written to `artifacts/`.
+The suite covers all 25 preset selections, intensity, press-and-hold and
+keyboard comparison, every adjustment's pixel effect, split tone and HSL grading,
+crop ratios, zoom/pan, rotation, straighten, flip, undo/redo, saved presets, copy/paste,
+session restore, keyboard shortcuts, local import and aspect ratio, valid JPG/PNG
+downloads, invalid-image errors, dialog keyboard dismissal, and responsive overflow.
+Screenshots and export samples are written to `artifacts/`.
 
 ## Current limits / not implemented
 

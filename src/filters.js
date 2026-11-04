@@ -36,9 +36,23 @@ const recipe = (overrides) => ({
 export const PRESET_TIERS = {
   free: 'Free',
   pro: 'Pro',
+  original: 'Original',
 }
 
-export const FILTERS = [
+// The neutral preset at the start of the strip: no filter effect, so the
+// photo shows exactly as imported (before any manual tweaks).
+export const ORIGINAL = {
+  id: 'original',
+  code: 'Original',
+  name: 'Original',
+  mood: 'No filter · the photo as imported',
+  tier: 'original',
+  swatch: '#e6e4dc',
+  recipe: recipe({}),
+}
+
+// The 24 looks (no Original), kept separate for engine tests.
+export const LOOKS = [
   // ── Free tier ────────────────────────────────────────────────────────────
   {
     id: 'b1',
@@ -347,6 +361,8 @@ export const FILTERS = [
     }),
   },
 ]
+
+export const FILTERS = [ORIGINAL, ...LOOKS]
 
 const signed = (value) => `${value > 0 ? '+' : ''}${value}`
 

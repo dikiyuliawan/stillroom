@@ -1,6 +1,7 @@
 # Stillroom — preset & tool reference
 
-Stillroom ships a **24-look preset library**. The look codes (A6, M5, C1 …) mirror
+Stillroom ships a **24-look preset library**, plus a neutral **Original** preset at the
+start of the strip that applies no effect. The look codes (A6, M5, C1 …) mirror
 the naming people recognise from VSCO so a familiar starting point is easy to
 find. Every look is Stillroom's **own numeric recipe** running on its own canvas
 pipeline — no third-party preset data is copied or reproduced.
@@ -13,6 +14,7 @@ unlocked** because all editing happens on your device.
 
 | Tier | Looks |
 | --- | --- |
+| **Original** | Original (applies nothing) |
 | **Free** | B1, B5, F2, G3, M3, M5, P5, T1, X1 |
 | **Pro** | A4, A5, A6, C1, C2, C3, G6, HB1, HB2, AL1, AL3, SS1, WE4, KE1, KP1 |
 
@@ -69,7 +71,10 @@ never dilutes a correction you made by hand.
 
 ## Editing tools
 
-- **Presets** — 24 built-in looks plus any you save yourself.
+- **Presets** — Original plus 24 built-in looks plus any you save yourself.
+  Original applies nothing and starts every manual adjustment from zero.
+- **Compare** — press and hold the photo (or hold <kbd>Space</kbd>) to see the
+  untouched original until release.
 - **Crop** — aspect ratios, rotate 90°, horizontal/vertical flip, fine-angle
   straighten (the frame auto-shrinks so no empty corners appear), zoom, and pan.
 - **Adjust** — Light (exposure, contrast, highlights, shadows, whites, blacks),

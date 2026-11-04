@@ -81,7 +81,13 @@ const ADJUST_TABS = [
 ];
 const pad = (value) => String(value).padStart(2, "0");
 const tierLabel = (tier) =>
-  tier === "pro" ? "Pro" : tier === "custom" ? "Saved" : "Free";
+  tier === "pro"
+    ? "Pro"
+    : tier === "custom"
+      ? "Saved"
+      : tier === "original"
+        ? "Unedited"
+        : "Free";
 
 function LogoMark() {
   return (
@@ -579,8 +585,26 @@ function App() {
     setCrop({ ...INITIAL_CROP });
   }
 
+  function handleStagePointerDown(event) {
+    if (event.button > 0) return;
+    if (tab === "crop") {
+      beginCropPan(event);
+      return;
+    }
+    // In every other tab, pressing and holding the photo drops the filter and
+    // shows the original framing until release.
+    event.preventDefault();
+    event.currentTarget.setPointerCapture?.(event.pointerId);
+    setCompare(true);
+  }
+
+  function handleStagePointerEnd() {
+    finishCropPan();
+    setCompare(false);
+  }
+
   function beginCropPan(event) {
-    if (tab !== "crop" || event.button > 0 || !cropGeometry) return;
+    if (event.button > 0 || !cropGeometry) return;
     event.preventDefault();
     beginHistoryTransaction();
     event.currentTarget.setPointerCapture?.(event.pointerId);
@@ -921,15 +945,17 @@ function App() {
         >
           {image ? (
             <div
-              className={`photo-stage ${tab === "crop" ? "is-cropping" : ""}`}
+              className={`photo-stage ${tab === "crop" ? "is-cropping" : ""} ${compare ? "is-comparing" : ""}`}
               style={{
                 aspectRatio: `${cropGeometry.ratio}`,
                 "--photo-ratio": cropGeometry.ratio,
               }}
-              onPointerDown={beginCropPan}
+              onPointerDown={handleStagePointerDown}
               onPointerMove={moveCropPan}
-              onPointerUp={finishCropPan}
-              onPointerCancel={finishCropPan}
+              onPointerUp={handleStagePointerEnd}
+              onPointerCancel={handleStagePointerEnd}
+              onPointerLeave={handleStagePointerEnd}
+              onContextMenu={(event) => event.preventDefault()}
             >
               <img
                 className="original-photo source-only"
@@ -949,43 +975,6 @@ function App() {
                 aria-label={`${activeFilter.name} filter preview`}
               />
               {compare && <div className="compare-tag">Original</div>}
-              {tab !== "crop" && (
-                <button
-                  className={`compare-button ${compare ? "compare-active" : ""}`}
-                  type="button"
-                  aria-label={
-                    compare
-                      ? "Showing original; release to see the edit"
-                      : "Hold to compare with original"
-                  }
-                  onPointerDown={(event) => {
-                    event.currentTarget.setPointerCapture?.(event.pointerId);
-                    setCompare(true);
-                  }}
-                  onPointerUp={() => setCompare(false)}
-                  onPointerCancel={() => setCompare(false)}
-                  onPointerLeave={() => setCompare(false)}
-                  onContextMenu={(event) => event.preventDefault()}
-                  onKeyDown={(event) => {
-                    if (event.key === " " || event.key === "Enter") {
-                      event.preventDefault();
-                      setCompare(true);
-                    }
-                  }}
-                  onKeyUp={(event) => {
-                    if (event.key === " " || event.key === "Enter") {
-                      event.preventDefault();
-                      setCompare(false);
-                    }
-                  }}
-                  onBlur={() => setCompare(false)}
-                  aria-pressed={compare}
-                >
-                  <span className="compare-symbol">
-                    <span />
-                  </span>
-                </button>
-              )}
               {dragging && (
                 <div className="drop-hint">
                   <ImagePlus size={28} />
@@ -1010,25 +999,29 @@ function App() {
           <div className="filter-heading">
             <div>
               <div className="eyebrow">
-                <span
-                  className={`tier-chip tier-${activeFilter.tier}`}
-                  title={
-                    activeFilter.tier === "pro"
-                      ? "A subscription look in VSCO — free here"
-                      : activeFilter.tier === "custom"
-                        ? "Your saved look"
-                        : "A free VSCO look"
-                  }
-                >
-                  {tierLabel(activeFilter.tier)}
-                </span>
+                {activeFilter.tier !== "original" && (
+                  <span
+                    className={`tier-chip tier-${activeFilter.tier}`}
+                    title={
+                      activeFilter.tier === "pro"
+                        ? "A subscription look in VSCO — free here"
+                        : activeFilter.tier === "custom"
+                          ? "Your saved look"
+                          : "A free VSCO look"
+                    }
+                  >
+                    {tierLabel(activeFilter.tier)}
+                  </span>
+                )}
                 PRESET&nbsp; {pad(Math.max(presetIndex + 1, 1))} /{" "}
                 {pad(allFilters.length)}
               </div>
               <h1>{activeFilter.name}</h1>
               <p>{activeFilter.mood}</p>
             </div>
-            <div className="intensity-number">{intensity}</div>
+            <div className="intensity-number">
+              {activeFilter.tier === "original" ? "—" : intensity}
+            </div>
           </div>
           <label className="intensity-control" htmlFor="intensity-range">
             <span>Intensity</span>
@@ -1038,7 +1031,9 @@ function App() {
               min="0"
               max="100"
               value={intensity}
+              disabled={activeFilter.tier === "original"}
               onChange={(event) => {
+                if (activeFilter.tier === "original") return;
                 beginHistoryTransaction();
                 setIntensity(Number(event.target.value));
               }}
@@ -1047,10 +1042,12 @@ function App() {
               onPointerUp={endHistoryTransaction}
               onKeyUp={endHistoryTransaction}
               onBlur={endHistoryTransaction}
-              style={{ "--range-fill": `${intensity}%` }}
+              style={{
+                "--range-fill": `${activeFilter.tier === "original" ? 0 : intensity}%`,
+              }}
               aria-valuetext={`${intensity}%`}
             />
-            <output>{intensity}%</output>
+            <output>{activeFilter.tier === "original" ? "—" : `${intensity}%`}</output>
           </label>
         </section>
 
@@ -1177,12 +1174,14 @@ function App() {
                         alt=""
                         draggable="false"
                       />
-                      <span
-                        className={`tier-badge tier-${filter.tier}`}
-                        aria-hidden="true"
-                      >
-                        {tierLabel(filter.tier)}
-                      </span>
+                      {filter.tier !== "original" && (
+                        <span
+                          className={`tier-badge tier-${filter.tier}`}
+                          aria-hidden="true"
+                        >
+                          {tierLabel(filter.tier)}
+                        </span>
+                      )}
                       {selectedId === filter.id && (
                         <span className="selected-check">
                           <Check size={12} strokeWidth={2.4} />

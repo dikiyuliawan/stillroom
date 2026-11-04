@@ -1,5 +1,5 @@
 import { test, expect } from "@playwright/test";
-import { FILTERS } from "../src/filters.js";
+import { FILTERS, LOOKS } from "../src/filters.js";
 import {
   fittedSize,
   getCropGeometry,
@@ -43,8 +43,18 @@ test("crop geometry bounds supported aspect ratios, rotation, and straighten", (
   expect(withinSource).toBe(true);
 });
 
+test("the preset library is Original-first, neutral, then 24 looks", () => {
+  expect(FILTERS).toHaveLength(25);
+  expect(LOOKS).toHaveLength(24);
+  expect(FILTERS[0].id).toBe("original");
+  expect(FILTERS[0].tier).toBe("original");
+  for (const value of Object.values(FILTERS[0].recipe)) {
+    expect(value).toBe(0);
+  }
+});
+
 test("preset intensity does not dilute manual tweaks", () => {
-  const preset = FILTERS[0].recipe;
+  const preset = LOOKS[0].recipe;
   const tuned = {
     ...preset,
     temp: preset.temp + 10,
@@ -72,9 +82,9 @@ test("tiled export matches the preview engine and every control alters pixels", 
   const result = await page.evaluate(async () => {
     const { renderFiltered, renderFilteredAsync, resolveRecipe } =
       await import("/src/image-processing.js");
-    const { FILTERS, createHsl } = await import("/src/filters.js");
+    const { LOOKS, createHsl } = await import("/src/filters.js");
     const source = document.querySelector(".original-photo");
-    const preset = FILTERS[5].recipe;
+    const preset = LOOKS[5].recipe;
     const recipe = resolveRecipe(preset, preset, 72);
     const hsl = {
       ...createHsl(),

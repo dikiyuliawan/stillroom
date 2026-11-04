@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 
 const filterNames = [
+  "Original",
   "B1",
   "B5",
   "F2",
@@ -47,8 +48,9 @@ test("mobile and desktop layouts stay within the viewport", async ({
   page.on("pageerror", (error) => errors.push(error.message));
   await ready(page);
   await expect(
-    page.getByRole("heading", { name: "B1", exact: true }),
+    page.getByRole("heading", { name: "Original", exact: true }),
   ).toBeVisible();
+  await expect(page.locator("#intensity-range")).toBeDisabled();
   await expect(page.locator(".original-photo")).toHaveAttribute(
     "src",
     "/tests/fixtures/demo-user-provided.webp",
@@ -61,7 +63,7 @@ test("mobile and desktop layouts stay within the viewport", async ({
   ).toBeVisible();
   await expect(
     page.getByRole("tabpanel", { name: "Presets" }).getByRole("button"),
-  ).toHaveCount(24);
+  ).toHaveCount(25);
   await page.screenshot({
     path: path.join(artifacts, "stillroom-mobile.png"),
     fullPage: true,
@@ -123,11 +125,11 @@ test("every preset changes the preview; intensity, compare, and adjustments work
     await expect(
       page.getByRole("button", { name, exact: true }),
     ).toHaveAttribute("aria-pressed", "true");
-    if (name !== "B1")
+    if (name !== "Original")
       await expect.poll(() => fingerprint(page)).not.toBe(previous);
     checksums.push(await fingerprint(page));
   }
-  expect(new Set(checksums).size).toBe(24);
+  expect(new Set(checksums).size).toBe(25);
 
   const intensity = page.locator("#intensity-range");
   await intensity.press("Home");
@@ -137,17 +139,18 @@ test("every preset changes the preview; intensity, compare, and adjustments work
   await expect(intensity).toHaveValue("100");
   await expect.poll(() => fingerprint(page)).not.toBe(original);
 
-  const compare = page.getByRole("button", {
-    name: "Hold to compare with original",
-    exact: true,
-  });
-  await compare.scrollIntoViewIfNeeded();
-  const box = await compare.boundingBox();
-  await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+  const stage = page.locator(".photo-stage");
+  await stage.scrollIntoViewIfNeeded();
+  const stageBox = await stage.boundingBox();
+  await page.mouse.move(
+    stageBox.x + stageBox.width / 2,
+    stageBox.y + stageBox.height / 2,
+  );
   await page.mouse.down();
-  await expect(page.getByText("Original", { exact: true })).toBeVisible();
+  await expect(page.locator(".compare-tag")).toBeVisible();
   await expect(page.locator(".processed-photo")).toHaveClass(/is-hidden/);
   await page.mouse.up();
+  await expect(page.locator(".compare-tag")).toHaveCount(0);
   await expect(page.locator(".processed-photo")).not.toHaveClass(/is-hidden/);
 
   await page.getByRole("tab", { name: "Adjust", exact: true }).click();
@@ -466,7 +469,7 @@ test("keyboard shortcuts drive history, export, and preview", async ({ page }) =
   await page.getByRole("button", { name: "C1", exact: true }).click();
   await page.getByRole("heading", { name: "C1", exact: true }).click();
   await page.keyboard.press("Control+z");
-  await expect(page.getByRole("heading", { name: "B1", exact: true })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Original", exact: true })).toBeVisible();
   await page.keyboard.press("Control+Shift+z");
   await expect(page.getByRole("heading", { name: "C1", exact: true })).toBeVisible();
 
@@ -489,9 +492,9 @@ test("keyboard shortcuts drive history, export, and preview", async ({ page }) =
   // Space compares against the original while held.
   await page.keyboard.press("1");
   await page.keyboard.down(" ");
-  await expect(page.getByText("Original", { exact: true })).toBeVisible();
+  await expect(page.locator(".compare-tag")).toBeVisible();
   await page.keyboard.up(" ");
-  await expect(page.getByText("Original", { exact: true })).toHaveCount(0);
+  await expect(page.locator(".compare-tag")).toHaveCount(0);
 });
 
 test("split tone and HSL grading alter the preview", async ({ page }) => {
