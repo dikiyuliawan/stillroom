@@ -4,15 +4,45 @@ import path from "node:path";
 
 const filterNames = [
   "Original",
+  "A6",
+  "M5",
+  "AL3",
+  "F2",
+  "HB1",
+  "KE1",
+  "CN1",
+  "CN2",
+  "CN3",
+  "CN4",
+  "CN5",
+  "CN6",
+  "G1",
+  "G2",
+  "G3",
+  "G4",
+  "G5",
+  "T1",
+  "SS1",
+  "D1",
+  "D2",
+  "D3",
+  "L1",
+  "L2",
+  "L3",
+  "WE4",
+  "C1",
+  "C2",
+  "V1",
+  "V2",
+  "KP1",
+  "P5",
+  "R1",
+  "R2",
+  "R3",
   "B1",
   "B5",
-  "F2",
-  "G3",
-  "M3",
-  "M5",
-  "P5",
-  "T1",
-  "X1",
+  "B7",
+  "B9",
 ];
 const artifacts = path.resolve("artifacts");
 
@@ -56,7 +86,19 @@ test("mobile and desktop layouts stay within the viewport", async ({
   ).toBeVisible();
   await expect(
     page.getByRole("tabpanel", { name: "Presets" }).getByRole("button"),
-  ).toHaveCount(25);
+  ).toHaveCount(40);
+  // The strip reads as labeled collections; saved looks append their own.
+  await expect(page.locator(".filter-group-label")).toHaveText([
+    "Original",
+    "Film",
+    "Cinema",
+    "Golden",
+    "Moody",
+    "Airy",
+    "Vivid",
+    "Retro",
+    "Mono",
+  ]);
   // The free app shows no subscription badges anywhere.
   await expect(page.locator(".tier-badge, .tier-chip")).toHaveCount(0);
   await page.screenshot({
@@ -99,26 +141,10 @@ test("mobile and desktop layouts stay within the viewport", async ({
 test("every preset changes the preview; intensity, compare, and adjustments work", async ({
   page,
 }) => {
+  test.setTimeout(90000);
   await ready(page);
   const checksums = [];
-  const allCodes = [
-    ...filterNames,
-    "A4",
-    "A5",
-    "A6",
-    "C1",
-    "C2",
-    "C3",
-    "G6",
-    "HB1",
-    "HB2",
-    "AL1",
-    "AL3",
-    "SS1",
-    "WE4",
-    "KE1",
-    "KP1",
-  ];
+  const allCodes = filterNames.slice(1);
   for (const name of allCodes) {
     const previous = await fingerprint(page);
     await page.getByRole("button", { name, exact: true }).click();
@@ -128,11 +154,10 @@ test("every preset changes the preview; intensity, compare, and adjustments work
     await expect(
       page.getByRole("button", { name, exact: true }),
     ).toHaveAttribute("aria-pressed", "true");
-    if (name !== "Original")
-      await expect.poll(() => fingerprint(page)).not.toBe(previous);
+    await expect.poll(() => fingerprint(page)).not.toBe(previous);
     checksums.push(await fingerprint(page));
   }
-  expect(new Set(checksums).size).toBe(25);
+  expect(new Set(checksums).size).toBe(allCodes.length);
 
   const intensity = page.locator("#intensity-range");
   await intensity.press("Home");
@@ -172,7 +197,11 @@ test("every preset changes the preview; intensity, compare, and adjustments work
   await expect(page.locator(".quick-control").first()).toContainText("+100");
   await page.getByRole("tab", { name: "Adjust", exact: true }).click();
   await page.getByRole("button", { name: "Reset", exact: true }).click();
-  await expect(temperature).toHaveValue("11");
+  // The loop ended on B9: resetting returns its full recipe, not zero.
+  await expect(temperature).toHaveValue("0");
+  await expect(
+    page.getByRole("slider", { name: "Saturation", exact: true }),
+  ).toHaveValue("-100");
   await expect(intensity).toHaveValue("72");
 });
 
@@ -531,4 +560,20 @@ test("the adjust panel exposes exactly nine sliders and none beyond it", async (
   await expect(
     page.getByRole("slider", { name: /Hue/, exact: true }),
   ).toHaveCount(0);
+});
+
+test("intensity zero neutralizes preset grading, including authored HSL", async ({
+  page,
+}) => {
+  await ready(page);
+  const untouched = await fingerprint(page);
+  await page.getByRole("button", { name: "CN1", exact: true }).click();
+  await expect(
+    page.getByRole("heading", { name: "CN1", exact: true }),
+  ).toBeVisible();
+  await expect.poll(() => fingerprint(page)).not.toBe(untouched);
+  const intensity = page.locator("#intensity-range");
+  await intensity.press("Home");
+  await expect(intensity).toHaveValue("0");
+  await expect.poll(() => fingerprint(page)).toBe(untouched);
 });

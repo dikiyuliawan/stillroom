@@ -543,17 +543,42 @@ input[type="range"]:disabled {
   -webkit-overflow-scrolling: touch;
 }
 
-/* Preset strip */
+/* Preset strip: labeled collections flowing in one horizontal scroller */
 .filter-strip {
   display: flex;
-  gap: 8px;
+  gap: 18px;
+  align-items: stretch;
   overflow-x: auto;
   overscroll-behavior-x: contain;
-  padding: 13px 0 12px;
+  padding: 11px 0 12px;
   margin-right: calc(-1 * var(--gutter));
   padding-right: var(--gutter);
   scrollbar-width: thin;
   scrollbar-color: #d2d0c5 transparent;
+}
+.filter-group {
+  flex: 0 0 auto;
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  padding-right: 18px;
+  border-right: 1px solid var(--line);
+}
+.filter-group:last-child {
+  border-right: 0;
+  padding-right: 0;
+}
+.filter-group-label {
+  color: #8d8c86;
+  font-size: 9px;
+  font-weight: 650;
+  letter-spacing: 0.2em;
+  text-transform: uppercase;
+  padding: 0 2px;
+}
+.filter-group-cards {
+  display: flex;
+  gap: 8px;
 }
 .filter-item {
   flex: 0 0 78px;
@@ -1044,8 +1069,18 @@ input[type="range"]:disabled {
     font-size: 14px;
   }
   .filter-strip {
-    gap: 16px;
+    gap: 28px;
     justify-content: flex-start;
+  }
+  .filter-group {
+    gap: 9px;
+    padding-right: 28px;
+  }
+  .filter-group-label {
+    font-size: 10px;
+  }
+  .filter-group-cards {
+    gap: 16px;
   }
   .filter-item {
     flex: 0 0 106px;

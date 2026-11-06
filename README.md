@@ -6,9 +6,10 @@ olive accents, a large photo preview, quiet typography, and a horizontal preset
 strip docked at the bottom of the viewport — the layout phone editors are used
 to, with no page scrolling while you edit.
 
-Stillroom is a free, local alternative to a photo-editing subscription: 24
-curated looks plus a neutral Original preset and the fine-tuning tools that
-matter, with no account, no upload, and no server.
+Stillroom is a free, local alternative to a photo-editing subscription: 39
+distinct looks across 8 style collections (film, cinema, golden hour, moody,
+airy, vivid, retro, mono) plus a neutral Original preset and the fine-tuning
+tools that matter, with no account, no upload, and no server.
 
 ## Run it
 
@@ -33,8 +34,12 @@ The production bundle is generated in `dist/`. It has not been deployed or publi
   the panel below — presets, intensity, crop, and adjustments are always reachable
   without scrolling, on phones and desktop alike.
 - Press-and-hold the photo (or hold <kbd>Space</kbd>) to see the original.
-- Choose from **24 looks plus an Original preset**. See `docs/filter-recipes.md`
-  for the library reference.
+- Choose from **39 looks plus an Original preset**, shown as small labeled
+  groups (Film, Cinema, Golden, Moody, Airy, Vivid, Retro, Mono) in the strip —
+  see `docs/filter-recipes.md` for the library reference. The cinematic, moody,
+  and retro looks use split-toning and per-channel HSL grading inside their
+  recipes; the intensity slider scales all of it, so 0% is always the untouched
+  photo.
 - One **intensity slider** for the selected look, always visible in the dock.
 - Nine fine-tuning controls in a single flat panel: exposure, contrast,
   temperature, tint, saturation, sharpen, fade, grain, and vignette. Deeper
@@ -109,7 +114,7 @@ Run the dev server first. Tests use system Chromium when available; otherwise
 install the Playwright browser with `npx playwright install chromium`. Set
 `PLAYWRIGHT_CHROMIUM_EXECUTABLE` to use a specific Chromium installation.
 
-The suite covers all 25 preset selections, intensity, press-and-hold and
+The suite covers all 40 preset selections, intensity, press-and-hold and
 keyboard comparison, every adjustment's pixel effect, crop ratios, pinch/pan,
 zoom/pan, rotation, straighten, flip, undo/redo, saved presets, session restore,
 the docked layout at every breakpoint, keyboard shortcuts, local import and

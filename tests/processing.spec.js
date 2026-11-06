@@ -43,13 +43,18 @@ test("crop geometry bounds supported aspect ratios, rotation, and straighten", (
   expect(withinSource).toBe(true);
 });
 
-test("the preset library is Original-first, neutral, then 24 looks", () => {
-  expect(FILTERS).toHaveLength(25);
-  expect(LOOKS).toHaveLength(24);
+test("the preset library is Original-first, neutral, then 39 looks in collections", () => {
+  expect(FILTERS).toHaveLength(40);
+  expect(LOOKS).toHaveLength(39);
   expect(FILTERS[0].id).toBe("original");
   expect(FILTERS[0].tier).toBe("original");
   for (const value of Object.values(FILTERS[0].recipe)) {
     expect(value).toBe(0);
+  }
+  const ids = new Set(LOOKS.map((look) => look.id));
+  expect(ids.size).toBe(LOOKS.length);
+  for (const look of LOOKS) {
+    expect(look.collection).toEqual(expect.any(String));
   }
 });
 

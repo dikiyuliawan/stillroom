@@ -18,7 +18,13 @@ import {
   Undo2,
   X,
 } from "lucide-react";
-import { ADJUSTMENTS, createHsl, FILTERS, isHslNeutral } from "./filters.js";
+import {
+  ADJUSTMENTS,
+  COLLECTIONS,
+  createHsl,
+  FILTERS,
+  scaleHsl,
+} from "./filters.js";
 import {
   getCropGeometry,
   renderFiltered,
@@ -297,13 +303,27 @@ function App() {
     () => allFilters.find((filter) => filter.id === selectedId) ?? allFilters[0],
     [allFilters, selectedId],
   );
+  // The strip reads as labeled chapters: each collection is a small block
+  // with an eyebrow label above its run of cards, saved looks appended last.
+  const filterGroups = useMemo(() => {
+    const groups = COLLECTIONS.map((collection) => ({
+      id: collection.id,
+      label: collection.label,
+      items: allFilters.filter((filter) => filter.collection === collection.id),
+    })).filter((group) => group.items.length > 0);
+    const saved = allFilters.filter((filter) => filter.tier === "custom");
+    if (saved.length) groups.push({ id: "saved", label: "Saved", items: saved });
+    return groups;
+  }, [allFilters]);
   const effectiveRecipe = useMemo(
     () => resolveRecipe(activeFilter.recipe, recipe, intensity),
     [activeFilter, recipe, intensity],
   );
+  // Preset-authored HSL grades are part of the look, so they scale with the
+  // intensity slider: at 0% the preview is the untouched photo.
   const effectiveHsl = useMemo(
-    () => (isHslNeutral(hsl) ? null : hsl),
-    [hsl],
+    () => scaleHsl(hsl, intensity / 100),
+    [hsl, intensity],
   );
   const cropGeometry = useMemo(
     () =>
@@ -526,7 +546,7 @@ function App() {
           resolveRecipe(filter.recipe, filter.recipe, THUMB_INTENSITY),
           180,
           crop,
-          filter.hsl ?? null,
+          scaleHsl(filter.hsl, THUMB_INTENSITY / 100),
         );
         cache[filter.id] = thumbnail.toDataURL("image/png");
       } catch {
@@ -1312,58 +1332,67 @@ function App() {
                   aria-label="Presets"
                   aria-labelledby="tab-filters"
                 >
-                  {allFilters.map((filter) => (
-                    <div className="filter-item" key={filter.id}>
-                      <button
-                        className={`filter-card ${selectedId === filter.id ? "selected" : ""}`}
-                        type="button"
-                        aria-label={filter.name}
-                        aria-pressed={selectedId === filter.id}
-                        onClick={() => startPreset(filter)}
-                      >
-                        <span
-                          className="filter-thumb"
-                          style={filter.swatch ? { background: filter.swatch } : undefined}
-                        >
-                          {(thumbnails[filter.id] || photoUrl) && (
-                            <img
-                              src={thumbnails[filter.id] || photoUrl}
-                              alt=""
-                              draggable="false"
-                            />
-                          )}
-                          {selectedId === filter.id && (
-                            <span className="selected-check">
-                              <Check size={12} strokeWidth={2.4} />
-                            </span>
-                          )}
-                        </span>
-                        <span className="filter-card-label">{filter.name}</span>
-                      </button>
-                      {filter.tier === "custom" && (
-                        <div className="preset-tools">
-                          <button
-                            type="button"
-                            aria-label={`Rename ${filter.name}`}
-                            onClick={() =>
-                              setPresetDialog({
-                                mode: "rename",
-                                id: filter.id,
-                                value: filter.name,
-                              })
-                            }
-                          >
-                            <Pencil size={12} />
-                          </button>
-                          <button
-                            type="button"
-                            aria-label={`Delete ${filter.name}`}
-                            onClick={() => deletePreset(filter.id)}
-                          >
-                            <Trash2 size={12} />
-                          </button>
-                        </div>
-                      )}
+                  {filterGroups.map((group) => (
+                    <div className="filter-group" key={group.id}>
+                      <div className="filter-group-label" aria-hidden="true">
+                        {group.label}
+                      </div>
+                      <div className="filter-group-cards">
+                        {group.items.map((filter) => (
+                          <div className="filter-item" key={filter.id}>
+                            <button
+                              className={`filter-card ${selectedId === filter.id ? "selected" : ""}`}
+                              type="button"
+                              aria-label={filter.name}
+                              aria-pressed={selectedId === filter.id}
+                              onClick={() => startPreset(filter)}
+                            >
+                              <span
+                                className="filter-thumb"
+                                style={filter.swatch ? { background: filter.swatch } : undefined}
+                              >
+                                {(thumbnails[filter.id] || photoUrl) && (
+                                  <img
+                                    src={thumbnails[filter.id] || photoUrl}
+                                    alt=""
+                                    draggable="false"
+                                  />
+                                )}
+                                {selectedId === filter.id && (
+                                  <span className="selected-check">
+                                    <Check size={12} strokeWidth={2.4} />
+                                  </span>
+                                )}
+                              </span>
+                              <span className="filter-card-label">{filter.name}</span>
+                            </button>
+                            {filter.tier === "custom" && (
+                              <div className="preset-tools">
+                                <button
+                                  type="button"
+                                  aria-label={`Rename ${filter.name}`}
+                                  onClick={() =>
+                                    setPresetDialog({
+                                      mode: "rename",
+                                      id: filter.id,
+                                      value: filter.name,
+                                    })
+                                  }
+                                >
+                                  <Pencil size={12} />
+                                </button>
+                                <button
+                                  type="button"
+                                  aria-label={`Delete ${filter.name}`}
+                                  onClick={() => deletePreset(filter.id)}
+                                >
+                                  <Trash2 size={12} />
+                                </button>
+                              </div>
+                            )}
+                          </div>
+                        ))}
+                      </div>
                     </div>
                   ))}
                 </div>
