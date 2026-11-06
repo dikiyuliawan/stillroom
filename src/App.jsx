@@ -2,10 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import {
   Aperture,
   Check,
-  ChevronLeft,
-  ClipboardPaste,
   Contrast,
-  Copy,
   Download,
   FlipHorizontal2,
   FlipVertical2,
@@ -21,16 +18,7 @@ import {
   Undo2,
   X,
 } from "lucide-react";
-import {
-  ADJUSTMENTS,
-  ADJUSTMENT_GROUPS,
-  createHsl,
-  FILTERS,
-  HSL_CHANNELS,
-  HSL_CONTROLS,
-  isHslNeutral,
-  SPLIT_TONE_CONTROLS,
-} from "./filters.js";
+import { ADJUSTMENTS, createHsl, FILTERS, isHslNeutral } from "./filters.js";
 import {
   getCropGeometry,
   renderFiltered,
@@ -49,6 +37,7 @@ const DEMO_URL = import.meta.env.DEV
   ? "/tests/fixtures/demo-user-provided.webp"
   : null;
 const THUMB_INTENSITY = 72;
+const HISTORY_LIMIT = 40;
 const INITIAL_CROP = {
   ratio: "original",
   zoom: 1,
@@ -74,20 +63,13 @@ const QUICK_SETTINGS = [
   { key: "contrast", label: "Contrast", Icon: Contrast },
   { key: "grain", label: "Grain", Icon: Aperture },
 ];
-const ADJUST_TABS = [
-  ...ADJUSTMENT_GROUPS,
-  { id: "grade", label: "Grade" },
-  { id: "hsl", label: "HSL" },
-];
+const clamp = (value, min, max) => Math.max(min, Math.min(max, value));
 const pad = (value) => String(value).padStart(2, "0");
-const tierLabel = (tier) =>
-  tier === "pro"
-    ? "Pro"
-    : tier === "custom"
-      ? "Saved"
-      : tier === "original"
-        ? "Unedited"
-        : "Free";
+const slugify = (value) =>
+  value
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "");
 
 function LogoMark() {
   return (
@@ -101,11 +83,168 @@ function LogoMark() {
   );
 }
 
+// One slider shape for every range in the app: an "stacked" variant for the
+// adjust grid (label and value above the track) and a "row" variant for
+// intensity and crop controls (label, track, value in one line). Both open a
+// history transaction on first input and close it on release.
+function EditSlider({
+  id,
+  label,
+  value,
+  min,
+  max,
+  step,
+  display,
+  onChange,
+  variant = "stacked",
+  disabled = false,
+  ariaLabel,
+  beginEdit,
+  endEdit,
+  hue = false,
+}) {
+  const fill = ((value - min) / (max - min)) * 100;
+  const input = (
+    <input
+      type="range"
+      id={id}
+      min={min}
+      max={max}
+      step={step}
+      value={value}
+      disabled={disabled}
+      onChange={(event) => onChange(Number(event.target.value))}
+      onPointerDown={beginEdit}
+      onKeyDown={beginEdit}
+      onPointerUp={endEdit}
+      onKeyUp={endEdit}
+      onBlur={endEdit}
+      className={hue ? "hue-range" : undefined}
+      style={{ "--range-fill": `${fill}%` }}
+      aria-label={ariaLabel ?? label}
+      aria-valuetext={display}
+    />
+  );
+  if (variant === "row") {
+    return (
+      <label className="row-slider" htmlFor={id}>
+        <span>{label}</span>
+        {input}
+        <output>{display}</output>
+      </label>
+    );
+  }
+  return (
+    <label className="adjustment-control">
+      <span className="adjustment-label">{label}</span>
+      <output>{display}</output>
+      {input}
+    </label>
+  );
+}
+
+// Shared dialog behavior for both bottom sheets: focus the first control (or
+// a given field), trap Tab, close on Escape, and restore focus on exit.
+function useSheetDialog(open, onClose, focusSelector) {
+  const sheetRef = useRef(null);
+  const closeRef = useRef(onClose);
+  useEffect(() => {
+    closeRef.current = onClose;
+  });
+  useEffect(() => {
+    if (!open) return undefined;
+    const previousFocus = document.activeElement;
+    const sheet = sheetRef.current;
+    const focusTimer = window.setTimeout(() => {
+      const target = focusSelector
+        ? sheet?.querySelector(focusSelector)
+        : sheet?.querySelector("button:not(:disabled)");
+      target?.focus?.();
+      if (target instanceof HTMLInputElement) target.select();
+    }, 30);
+    function onKeyDown(event) {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        closeRef.current();
+      }
+      if (event.key !== "Tab" || !sheet) return;
+      const controls = [
+        ...sheet.querySelectorAll(
+          "button:not(:disabled), input:not(:disabled)",
+        ),
+      ];
+      const first = controls[0];
+      const last = controls[controls.length - 1];
+      if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault();
+        last?.focus();
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault();
+        first?.focus();
+      }
+    }
+    document.addEventListener("keydown", onKeyDown);
+    return () => {
+      window.clearTimeout(focusTimer);
+      document.removeEventListener("keydown", onKeyDown);
+      previousFocus?.focus?.();
+    };
+  }, [open, focusSelector]);
+  return sheetRef;
+}
+
+// Swipe-down-to-dismiss for the bottom sheets, so the grab handle finally
+// does what it looks like it does. Drags that start on form controls are
+// ignored; anything dragged past ~90px closes the sheet.
+function useSheetDrag(onClose) {
+  const [offset, setOffset] = useState(0);
+  const [dragging, setDragging] = useState(false);
+  const gesture = useRef(null);
+  const closeRef = useRef(onClose);
+  useEffect(() => {
+    closeRef.current = onClose;
+  });
+
+  function onPointerDown(event) {
+    if (event.button > 0) return;
+    if (event.target.closest("input, button, a, select, textarea")) return;
+    gesture.current = { id: event.pointerId, startY: event.clientY };
+    event.currentTarget.setPointerCapture?.(event.pointerId);
+  }
+  function onPointerMove(event) {
+    if (!gesture.current || gesture.current.id !== event.pointerId) return;
+    const dy = Math.max(0, event.clientY - gesture.current.startY);
+    setDragging(dy > 4);
+    setOffset(dy);
+  }
+  function onPointerEnd(event) {
+    if (!gesture.current || gesture.current.id !== event.pointerId) return;
+    const dy = Math.max(0, event.clientY - gesture.current.startY);
+    gesture.current = null;
+    setDragging(false);
+    setOffset(0);
+    if (dy > 90) closeRef.current();
+  }
+
+  return {
+    dragProps: {
+      onPointerDown,
+      onPointerMove,
+      onPointerUp: onPointerEnd,
+      onPointerCancel: onPointerEnd,
+    },
+    sheetStyle: {
+      transform: offset ? `translateY(${offset}px)` : undefined,
+      transition: dragging ? "none" : "transform 0.2s ease",
+    },
+  };
+}
+
 function App() {
   const [image, setImage] = useState(null);
   const [photoUrl, setPhotoUrl] = useState(DEMO_URL);
   const [photoName, setPhotoName] = useState(
-    DEMO_URL ? "User-provided demo sample" : "",
+    DEMO_URL ? "Demo sample" : "",
   );
   const [selectedId, setSelectedId] = useState(FILTERS[0].id);
   const [recipe, setRecipe] = useState({ ...FILTERS[0].recipe });
@@ -118,37 +257,37 @@ function App() {
     canRedo: false,
   });
   const [tab, setTab] = useState("filters");
-  const [adjustGroup, setAdjustGroup] = useState("light");
-  const [hslChannel, setHslChannel] = useState(HSL_CHANNELS[0].id);
   const [compare, setCompare] = useState(false);
   const [dragging, setDragging] = useState(false);
   const [exportOpen, setExportOpen] = useState(false);
   const [exportFormat, setExportFormat] = useState("jpg");
   const [exportSize, setExportSize] = useState("original");
   const [exporting, setExporting] = useState(false);
-  const [largeExportEdge] = useState(() =>
-    window.matchMedia("(max-width: 768px)").matches ? 3200 : 5000,
-  );
+  const [largeExportEdge, setLargeExportEdge] = useState(3200);
   const [toast, setToast] = useState("");
   const [loading, setLoading] = useState(true);
   const [thumbnails, setThumbnails] = useState({});
-  const [clipboard, setClipboard] = useState(null);
   const [presetDialog, setPresetDialog] = useState(null);
+  const [stageBox, setStageBox] = useState({ width: 0, height: 0 });
   const canvasRef = useRef(null);
   const originalCanvasRef = useRef(null);
   const inputRef = useRef(null);
-  const exportSheetRef = useRef(null);
   const presetNameRef = useRef(null);
+  const stageWrapRef = useRef(null);
   const loadSequence = useRef(0);
   const currentObjectUrl = useRef(null);
   const persistedPhoto = useRef(null);
   const historyRef = useRef({ past: [], future: [] });
   const historyTransaction = useRef(false);
-  const cropDrag = useRef(null);
+  const panGesture = useRef(null);
+  const pinchGesture = useRef(null);
+  const stagePointers = useRef(new Map());
+  const stageRect = useRef(null);
   const thumbToken = useRef(0);
   const keyHandlerRef = useRef(() => {});
   const keyUpHandlerRef = useRef(() => {});
   const notifiedStorage = useRef(false);
+  const cropGeometryRef = useRef(null);
 
   const allFilters = useMemo(
     () => [...FILTERS, ...customPresets],
@@ -173,6 +312,49 @@ function App() {
         : null,
     [image, crop],
   );
+  useEffect(() => {
+    cropGeometryRef.current = cropGeometry;
+  });
+
+  const exportSheetRef = useSheetDialog(exportOpen, () => setExportOpen(false));
+  const presetSheetRef = useSheetDialog(
+    presetDialog !== null,
+    () => setPresetDialog(null),
+    ".preset-name-field input",
+  );
+  const exportDrag = useSheetDrag(() => setExportOpen(false));
+  const presetDrag = useSheetDrag(() => setPresetDialog(null));
+
+  // The photo stage gets whatever height the dock leaves over; the photo box
+  // is fitted into it in JS because a pure aspect-ratio box cannot satisfy
+  // both width and height constraints at once.
+  useEffect(() => {
+    const element = stageWrapRef.current;
+    if (!element || typeof ResizeObserver === "undefined") return undefined;
+    const observer = new ResizeObserver(([entry]) => {
+      const { width, height } = entry.contentRect;
+      setStageBox((previous) =>
+        Math.abs(previous.width - width) < 1 &&
+        Math.abs(previous.height - height) < 1
+          ? previous
+          : { width, height },
+      );
+    });
+    observer.observe(element);
+    return () => observer.disconnect();
+  }, []);
+
+  const fittedStage = useMemo(() => {
+    if (!cropGeometry || !stageBox.width || !stageBox.height) return null;
+    const ratio = cropGeometry.ratio;
+    let width = stageBox.width;
+    let height = width / ratio;
+    if (height > stageBox.height) {
+      height = stageBox.height;
+      width = height * ratio;
+    }
+    return { width: Math.floor(width), height: Math.floor(height) };
+  }, [cropGeometry, stageBox]);
 
   // ── Loading: restore a saved session first, otherwise fall back to the demo.
   useEffect(() => {
@@ -199,9 +381,9 @@ function App() {
       }
       if (session.history && Array.isArray(session.history.past)) {
         historyRef.current = {
-          past: session.history.past.slice(-40),
+          past: session.history.past.slice(-HISTORY_LIMIT),
           future: Array.isArray(session.history.future)
-            ? session.history.future.slice(-40)
+            ? session.history.future.slice(-HISTORY_LIMIT)
             : [],
         };
       }
@@ -261,8 +443,8 @@ function App() {
       crop,
       hsl,
       history: {
-        past: historyRef.current.past.slice(-40),
-        future: historyRef.current.future.slice(-40),
+        past: historyRef.current.past.slice(-HISTORY_LIMIT),
+        future: historyRef.current.future.slice(-HISTORY_LIMIT),
       },
     });
     const flush = () => {
@@ -280,9 +462,10 @@ function App() {
     };
   }, [loading, photoName, selectedId, recipe, intensity, crop, hsl, historyFlags]);
 
-  // ── Preview render.
+  // ── Preview renders. The unfiltered framing canvas only depends on the
+  // photo and crop, so moving a slider never re-renders it.
   useEffect(() => {
-    if (!image || !canvasRef.current || !originalCanvasRef.current) return;
+    if (!image || !originalCanvasRef.current) return;
     const timer = window.setTimeout(() => {
       try {
         renderFiltered(
@@ -292,6 +475,17 @@ function App() {
           1500,
           crop,
         );
+      } catch (error) {
+        console.error("Could not draw the photo framing", error);
+      }
+    }, 20);
+    return () => window.clearTimeout(timer);
+  }, [image, crop]);
+
+  useEffect(() => {
+    if (!image || !canvasRef.current) return;
+    const timer = window.setTimeout(() => {
+      try {
         renderFiltered(
           image,
           canvasRef.current,
@@ -308,7 +502,9 @@ function App() {
     return () => window.clearTimeout(timer);
   }, [image, effectiveRecipe, effectiveHsl, crop]);
 
-  // ── Thumbnails are generated one at a time so a large library never blocks.
+  // ── Thumbnails are generated one at a time so a large library never blocks,
+  // and only after the crop settles, so pan/zoom gestures don't regenerate
+  // the whole strip on every pointer move.
   useEffect(() => {
     if (!image) return undefined;
     const token = ++thumbToken.current;
@@ -341,7 +537,7 @@ function App() {
     };
 
     setThumbnails({});
-    timer = window.setTimeout(pump, 40);
+    timer = window.setTimeout(pump, 250);
     return () => {
       window.clearTimeout(timer);
       thumbToken.current += 1;
@@ -354,111 +550,60 @@ function App() {
     return () => window.clearTimeout(timer);
   }, [toast]);
 
+  // ── Keyboard shortcuts. The handlers are refreshed after every render but
+  // the listeners themselves are attached once.
   useEffect(() => {
-    if (!exportOpen) return undefined;
-    const previousFocus = document.activeElement;
-    const sheet = exportSheetRef.current;
-    sheet?.querySelector("button")?.focus();
-    function onKeyDown(event) {
-      if (event.key === "Escape") {
+    keyHandlerRef.current = (event) => {
+      const target = event.target;
+      const typing =
+        target &&
+        (target.tagName === "INPUT" ||
+          target.tagName === "TEXTAREA" ||
+          target.isContentEditable);
+      const mod = event.ctrlKey || event.metaKey;
+
+      if (mod && event.key.toLowerCase() === "z") {
         event.preventDefault();
-        setExportOpen(false);
+        if (event.shiftKey) redoEdit();
+        else undoEdit();
+        return;
       }
-      if (event.key !== "Tab" || !sheet) return;
-      const controls = [
-        ...sheet.querySelectorAll(
-          "button:not(:disabled), input:not(:disabled)",
-        ),
-      ];
-      const first = controls[0];
-      const last = controls[controls.length - 1];
-      if (event.shiftKey && document.activeElement === first) {
+      if (mod && event.key.toLowerCase() === "y") {
         event.preventDefault();
-        last?.focus();
-      } else if (!event.shiftKey && document.activeElement === last) {
-        event.preventDefault();
-        first?.focus();
+        redoEdit();
+        return;
       }
-    }
-    document.addEventListener("keydown", onKeyDown);
-    return () => {
-      document.removeEventListener("keydown", onKeyDown);
-      previousFocus?.focus?.();
+      if (mod && event.key.toLowerCase() === "s") {
+        event.preventDefault();
+        if (image && !exporting) openExport();
+        return;
+      }
+      if (exportOpen || presetDialog || typing || mod) return;
+
+      if (event.key === " " && tab !== "crop") {
+        event.preventDefault();
+        setCompare(true);
+        return;
+      }
+      if (event.key === "1") {
+        event.preventDefault();
+        setTab("filters");
+        return;
+      }
+      if (event.key === "2") {
+        event.preventDefault();
+        setTab("crop");
+        return;
+      }
+      if (event.key === "3") {
+        event.preventDefault();
+        setTab("adjust");
+      }
     };
-  }, [exportOpen]);
-
-  useEffect(() => {
-    if (!presetDialog) return undefined;
-    const previousFocus = document.activeElement;
-    window.setTimeout(() => {
-      presetNameRef.current?.focus();
-      presetNameRef.current?.select();
-    }, 30);
-    function onKeyDown(event) {
-      if (event.key === "Escape") {
-        event.preventDefault();
-        setPresetDialog(null);
-      }
-    }
-    document.addEventListener("keydown", onKeyDown);
-    return () => {
-      document.removeEventListener("keydown", onKeyDown);
-      previousFocus?.focus?.();
+    keyUpHandlerRef.current = (event) => {
+      if (event.key === " ") setCompare(false);
     };
-  }, [presetDialog]);
-
-  // ── Keyboard shortcuts. Handlers live in refs so the listener stays attached.
-  keyHandlerRef.current = (event) => {
-    const target = event.target;
-    const typing =
-      target &&
-      (target.tagName === "INPUT" ||
-        target.tagName === "TEXTAREA" ||
-        target.isContentEditable);
-    const mod = event.ctrlKey || event.metaKey;
-
-    if (mod && event.key.toLowerCase() === "z") {
-      event.preventDefault();
-      if (event.shiftKey) redoEdit();
-      else undoEdit();
-      return;
-    }
-    if (mod && event.key.toLowerCase() === "y") {
-      event.preventDefault();
-      redoEdit();
-      return;
-    }
-    if (mod && event.key.toLowerCase() === "s") {
-      event.preventDefault();
-      if (image && !exporting) setExportOpen(true);
-      return;
-    }
-    if (exportOpen || presetDialog || typing || mod) return;
-
-    if (event.key === " " && tab !== "crop") {
-      event.preventDefault();
-      setCompare(true);
-      return;
-    }
-    if (event.key === "1") {
-      event.preventDefault();
-      setTab("filters");
-      return;
-    }
-    if (event.key === "2") {
-      event.preventDefault();
-      setTab("crop");
-      return;
-    }
-    if (event.key === "3") {
-      event.preventDefault();
-      setTab("adjust");
-    }
-  };
-
-  keyUpHandlerRef.current = (event) => {
-    if (event.key === " ") setCompare(false);
-  };
+  });
 
   useEffect(() => {
     const onDown = (event) => keyHandlerRef.current(event);
@@ -493,9 +638,10 @@ function App() {
   }
 
   function recordEdit() {
-    historyRef.current.past = [...historyRef.current.past, captureEdit()].slice(
-      -40,
-    );
+    historyRef.current.past = [
+      ...historyRef.current.past,
+      captureEdit(),
+    ].slice(-HISTORY_LIMIT);
     historyRef.current.future = [];
     historyTransaction.current = false;
     syncHistoryFlags();
@@ -506,7 +652,7 @@ function App() {
       historyRef.current.past = [
         ...historyRef.current.past,
         captureEdit(),
-      ].slice(-40);
+      ].slice(-HISTORY_LIMIT);
       historyRef.current.future = [];
       historyTransaction.current = true;
       syncHistoryFlags();
@@ -544,9 +690,10 @@ function App() {
     historyTransaction.current = false;
     const next = historyRef.current.future.pop();
     if (!next) return;
-    historyRef.current.past = [...historyRef.current.past, captureEdit()].slice(
-      -40,
-    );
+    historyRef.current.past = [
+      ...historyRef.current.past,
+      captureEdit(),
+    ].slice(-HISTORY_LIMIT);
     applyEdit(next);
     syncHistoryFlags();
   }
@@ -585,10 +732,28 @@ function App() {
     setCrop({ ...INITIAL_CROP });
   }
 
+  // ── Photo stage gestures: press-and-hold to compare, one-finger pan and
+  // two-finger pinch to zoom while cropping.
   function handleStagePointerDown(event) {
     if (event.button > 0) return;
     if (tab === "crop") {
-      beginCropPan(event);
+      const pointers = stagePointers.current;
+      pointers.set(event.pointerId, { x: event.clientX, y: event.clientY });
+      event.currentTarget.setPointerCapture?.(event.pointerId);
+      if (pointers.size === 1) {
+        beginPan(event);
+      } else if (pointers.size === 2) {
+        // A second finger turns the pan into a pinch-zoom.
+        panGesture.current = null;
+        const [a, b] = [...pointers.values()];
+        pinchGesture.current = {
+          distance: Math.hypot(a.x - b.x, a.y - b.y) || 1,
+          zoom: crop.zoom,
+          centerX: (a.x + b.x) / 2,
+          centerY: (a.y + b.y) / 2,
+        };
+        beginHistoryTransaction();
+      }
       return;
     }
     // In every other tab, pressing and holding the photo drops the filter and
@@ -598,61 +763,112 @@ function App() {
     setCompare(true);
   }
 
-  function handleStagePointerEnd() {
-    finishCropPan();
-    setCompare(false);
-  }
-
-  function beginCropPan(event) {
-    if (event.button > 0 || !cropGeometry) return;
+  function beginPan(event) {
+    if (!cropGeometry) return;
     event.preventDefault();
     beginHistoryTransaction();
-    event.currentTarget.setPointerCapture?.(event.pointerId);
-    const rect = event.currentTarget.getBoundingClientRect();
-    const horizontalRange = cropGeometry.orientedWidth - cropGeometry.width;
-    const verticalRange = cropGeometry.orientedHeight - cropGeometry.height;
-    cropDrag.current = {
-      x: event.clientX,
-      y: event.clientY,
-      offsetXPerPixel:
-        horizontalRange > 0
-          ? (2 * cropGeometry.width) / (rect.width * horizontalRange)
-          : 0,
-      offsetYPerPixel:
-        verticalRange > 0
-          ? (2 * cropGeometry.height) / (rect.height * verticalRange)
-          : 0,
-    };
+    stageRect.current = event.currentTarget.getBoundingClientRect();
+    panGesture.current = { x: event.clientX, y: event.clientY };
   }
 
-  function moveCropPan(event) {
-    if (!cropDrag.current) return;
-    const dx = event.clientX - cropDrag.current.x;
-    const dy = event.clientY - cropDrag.current.y;
-    cropDrag.current.x = event.clientX;
-    cropDrag.current.y = event.clientY;
+  function moveStagePointer(event) {
+    const pointers = stagePointers.current;
+    if (pointers.has(event.pointerId)) {
+      pointers.set(event.pointerId, { x: event.clientX, y: event.clientY });
+    }
+
+    if (pinchGesture.current && pointers.size >= 2) {
+      const geometry = cropGeometryRef.current;
+      if (!geometry || !stageRect.current) return;
+      const [a, b] = [...pointers.values()];
+      const distance = Math.hypot(a.x - b.x, a.y - b.y) || 1;
+      const centerX = (a.x + b.x) / 2;
+      const centerY = (a.y + b.y) / 2;
+      const start = pinchGesture.current;
+      const nextZoom = clamp(
+        (start.zoom * distance) / start.distance,
+        1,
+        3,
+      );
+      const horizontalRange = geometry.orientedWidth - geometry.width;
+      const verticalRange = geometry.orientedHeight - geometry.height;
+      const rect = stageRect.current;
+      const offsetXPerPixel =
+        horizontalRange > 0
+          ? (2 * geometry.width) / (rect.width * horizontalRange)
+          : 0;
+      const offsetYPerPixel =
+        verticalRange > 0
+          ? (2 * geometry.height) / (rect.height * verticalRange)
+          : 0;
+      pinchGesture.current = { ...start, centerX, centerY };
+      setCrop((previous) => ({
+        ...previous,
+        zoom: nextZoom,
+        offsetX: clamp(
+          previous.offsetX - (centerX - start.centerX) * offsetXPerPixel,
+          -1,
+          1,
+        ),
+        offsetY: clamp(
+          previous.offsetY - (centerY - start.centerY) * offsetYPerPixel,
+          -1,
+          1,
+        ),
+      }));
+      return;
+    }
+
+    if (!panGesture.current || !pointers.has(event.pointerId)) return;
+    const gesture = panGesture.current;
+    const dx = event.clientX - gesture.x;
+    const dy = event.clientY - gesture.y;
+    gesture.x = event.clientX;
+    gesture.y = event.clientY;
+    const geometry = cropGeometryRef.current;
+    if (!geometry || !stageRect.current) return;
+    const horizontalRange = geometry.orientedWidth - geometry.width;
+    const verticalRange = geometry.orientedHeight - geometry.height;
+    const rect = stageRect.current;
     setCrop((previous) => ({
       ...previous,
-      offsetX: Math.max(
+      offsetX: clamp(
+        previous.offsetX -
+          (dx *
+            (horizontalRange > 0
+              ? (2 * geometry.width) / (rect.width * horizontalRange)
+              : 0)),
         -1,
-        Math.min(
-          1,
-          previous.offsetX - dx * cropDrag.current.offsetXPerPixel,
-        ),
+        1,
       ),
-      offsetY: Math.max(
+      offsetY: clamp(
+        previous.offsetY -
+          (dy *
+            (verticalRange > 0
+              ? (2 * geometry.height) / (rect.height * verticalRange)
+              : 0)),
         -1,
-        Math.min(
-          1,
-          previous.offsetY - dy * cropDrag.current.offsetYPerPixel,
-        ),
+        1,
       ),
     }));
   }
 
-  function finishCropPan() {
-    cropDrag.current = null;
-    endHistoryTransaction();
+  function handleStagePointerEnd(event) {
+    if (tab === "crop") {
+      stagePointers.current.delete(event.pointerId);
+      if (stagePointers.current.size === 0) {
+        pinchGesture.current = null;
+        panGesture.current = null;
+        endHistoryTransaction();
+      } else if (stagePointers.current.size === 1) {
+        // The pinch ended; keep panning with whichever finger remains.
+        pinchGesture.current = null;
+        const [remaining] = [...stagePointers.current.values()];
+        panGesture.current = { x: remaining.x, y: remaining.y };
+      }
+      return;
+    }
+    setCompare(false);
   }
 
   function startPreset(filter) {
@@ -718,20 +934,7 @@ function App() {
 
   function updateAdjustment(key, value) {
     beginHistoryTransaction();
-    setRecipe((previous) => ({ ...previous, [key]: Number(value) }));
-  }
-
-  function updateSplit(key, value) {
-    beginHistoryTransaction();
-    setRecipe((previous) => ({ ...previous, [key]: Number(value) }));
-  }
-
-  function updateHsl(channel, key, value) {
-    beginHistoryTransaction();
-    setHsl((previous) => ({
-      ...previous,
-      [channel]: { ...previous[channel], [key]: Number(value) },
-    }));
+    setRecipe((previous) => ({ ...previous, [key]: value }));
   }
 
   function resetRecipe() {
@@ -742,37 +945,8 @@ function App() {
     notify("Back to the original recipe.");
   }
 
-  function openAdjust(key) {
-    const adjustment = ADJUSTMENTS.find((item) => item.key === key);
+  function openAdjust() {
     setTab("adjust");
-    setAdjustGroup(adjustment?.group ?? "light");
-    window.setTimeout(
-      () =>
-        document
-          .getElementById(`adjust-${key}`)
-          ?.scrollIntoView({ behavior: "smooth", block: "nearest" }),
-      80,
-    );
-  }
-
-  function copyEdits() {
-    setClipboard({
-      recipe: { ...recipe },
-      hsl: { ...hsl },
-      crop: { ...crop },
-      intensity,
-    });
-    notify("Edit copied — paste it onto another photo.");
-  }
-
-  function pasteEdits() {
-    if (!clipboard) return;
-    recordEdit();
-    setRecipe({ ...clipboard.recipe });
-    setHsl({ ...createHsl(), ...clipboard.hsl });
-    setCrop({ ...clipboard.crop });
-    setIntensity(clipboard.intensity);
-    notify("Edit pasted.");
   }
 
   function saveCurrentAsPreset(name) {
@@ -818,6 +992,13 @@ function App() {
     notify("Preset deleted.");
   }
 
+  function openExport() {
+    setLargeExportEdge(
+      window.matchMedia("(max-width: 768px)").matches ? 3200 : 5000,
+    );
+    setExportOpen(true);
+  }
+
   async function exportImage() {
     if (!image || exporting) return;
     setExporting(true);
@@ -827,12 +1008,20 @@ function App() {
     const maxEdge = exportSize === "web" ? 2500 : largeExportEdge;
     const exportCanvas = document.createElement("canvas");
     try {
+      let lastReported = 0;
       await renderFilteredAsync(
         image,
         exportCanvas,
         effectiveRecipe,
         maxEdge,
-        (progress) => notify(`Processing locally… ${progress}%`),
+        (progress) => {
+          // Report in ~10% steps so the toast doesn't re-render the app for
+          // every 128-pixel strip.
+          if (progress - lastReported >= 10 || progress >= 100) {
+            lastReported = progress;
+            notify(`Processing locally… ${progress}%`);
+          }
+        },
         crop,
         effectiveHsl,
       );
@@ -851,7 +1040,8 @@ function App() {
       const href = URL.createObjectURL(blob);
       const anchor = document.createElement("a");
       anchor.href = href;
-      anchor.download = `${photoName || "stillroom-edit"}-${activeFilter.id}.${exportFormat}`;
+      const lookSlug = slugify(activeFilter.code || activeFilter.name);
+      anchor.download = `${photoName || "stillroom-edit"}${lookSlug ? `-${lookSlug}` : ""}.${exportFormat}`;
       anchor.click();
       window.setTimeout(() => URL.revokeObjectURL(href), 30000);
       notify("Export saved to your downloads.");
@@ -865,10 +1055,15 @@ function App() {
     }
   }
 
-  const aspectLabel = cropGeometry    ? `${cropGeometry.ratio > 1.04 ? "Landscape" : cropGeometry.ratio < 0.96 ? "Portrait" : "Square"} · ${crop.ratio === "original" ? `Original · ${simplifyRatio(cropGeometry.width, cropGeometry.height)}` : crop.ratio}`
-    : "Portrait · Original";
+  const aspectLabel = cropGeometry
+    ? `${cropGeometry.ratio > 1.04 ? "Landscape" : cropGeometry.ratio < 0.96 ? "Portrait" : "Square"} · ${
+        crop.ratio === "original"
+          ? `Original · ${simplifyRatio(cropGeometry.width, cropGeometry.height)}`
+          : crop.ratio
+      }`
+    : "";
   const presetIndex = allFilters.findIndex((filter) => filter.id === selectedId);
-  const activeHsl = hsl[hslChannel];
+  const filterCount = allFilters.length;
 
   return (
     <div className="app-shell" onDragOver={(event) => event.preventDefault()}>
@@ -888,7 +1083,7 @@ function App() {
             onClick={openPicker}
             aria-label="Import a photo"
           >
-            <ChevronLeft size={20} strokeWidth={1.8} />
+            <ImagePlus size={19} strokeWidth={1.8} />
             <span>Import</span>
           </button>
           <div className="history-tools" aria-label="Edit history">
@@ -921,7 +1116,7 @@ function App() {
         <button
           className="top-export"
           type="button"
-          onClick={() => setExportOpen(true)}
+          onClick={openExport}
           disabled={!image || exporting}
         >
           {exporting ? "Saving…" : "Export"}
@@ -929,10 +1124,8 @@ function App() {
       </header>
 
       <main id="top" className="editor">
-        <div className="image-meta">
-          <span>{aspectLabel}</span>
-        </div>
         <section
+          ref={stageWrapRef}
           className={`stage-wrap ${dragging ? "is-dragging" : ""}`}
           onDrop={handleDrop}
           onDragEnter={(event) => {
@@ -947,23 +1140,15 @@ function App() {
             <div
               className={`photo-stage ${tab === "crop" ? "is-cropping" : ""} ${compare ? "is-comparing" : ""}`}
               style={{
-                aspectRatio: `${cropGeometry.ratio}`,
-                "--photo-ratio": cropGeometry.ratio,
+                "--photo-ratio": cropGeometry ? cropGeometry.ratio : 0.8,
+                ...(fittedStage ?? {}),
               }}
               onPointerDown={handleStagePointerDown}
-              onPointerMove={moveCropPan}
+              onPointerMove={moveStagePointer}
               onPointerUp={handleStagePointerEnd}
               onPointerCancel={handleStagePointerEnd}
-              onPointerLeave={handleStagePointerEnd}
               onContextMenu={(event) => event.preventDefault()}
             >
-              <img
-                className="original-photo source-only"
-                src={photoUrl}
-                alt={photoName}
-                draggable="false"
-                aria-hidden="true"
-              />
               <canvas
                 ref={originalCanvasRef}
                 className="original-framing"
@@ -990,588 +1175,345 @@ function App() {
               </span>
             </button>
           )}
-        </section>
-        <div className="compare-caption">
-          {tab === "crop" ? "Drag to reposition" : "Hold to compare"}
-        </div>
-
-        <section className="filter-intro" aria-live="polite">
-          <div className="filter-heading">
-            <div>
-              <div className="eyebrow">
-                {activeFilter.tier !== "original" && (
-                  <span
-                    className={`tier-chip tier-${activeFilter.tier}`}
-                    title={
-                      activeFilter.tier === "pro"
-                        ? "A subscription look in VSCO — free here"
-                        : activeFilter.tier === "custom"
-                          ? "Your saved look"
-                          : "A free VSCO look"
-                    }
-                  >
-                    {tierLabel(activeFilter.tier)}
-                  </span>
-                )}
-                PRESET&nbsp; {pad(Math.max(presetIndex + 1, 1))} /{" "}
-                {pad(allFilters.length)}
-              </div>
-              <h1>{activeFilter.name}</h1>
-              <p>{activeFilter.mood}</p>
-            </div>
-            <div className="intensity-number">
-              {activeFilter.tier === "original" ? "—" : intensity}
-            </div>
-          </div>
-          <label className="intensity-control" htmlFor="intensity-range">
-            <span>Intensity</span>
-            <input
-              id="intensity-range"
-              type="range"
-              min="0"
-              max="100"
-              value={intensity}
-              disabled={activeFilter.tier === "original"}
-              onChange={(event) => {
-                if (activeFilter.tier === "original") return;
-                beginHistoryTransaction();
-                setIntensity(Number(event.target.value));
-              }}
-              onPointerDown={beginHistoryTransaction}
-              onKeyDown={beginHistoryTransaction}
-              onPointerUp={endHistoryTransaction}
-              onKeyUp={endHistoryTransaction}
-              onBlur={endHistoryTransaction}
-              style={{
-                "--range-fill": `${activeFilter.tier === "original" ? 0 : intensity}%`,
-              }}
-              aria-valuetext={`${intensity}%`}
-            />
-            <output>{activeFilter.tier === "original" ? "—" : `${intensity}%`}</output>
-          </label>
-        </section>
-
-        <section
-          className="quick-controls"
-          aria-label="Quick adjustment controls"
-        >
-          {QUICK_SETTINGS.map(({ key, label, Icon }, index) => (
-            <button
-              className="quick-control"
-              type="button"
-              key={key}
-              onClick={() => openAdjust(key)}
-            >
-              <Icon size={24} strokeWidth={1.65} />
-              <span className="quick-copy">
-                <span>{label}</span>
-                <strong>
-                  {key !== "grain" && recipe[key] > 0 ? "+" : ""}
-                  {recipe[key]}
-                </strong>
-              </span>
-              {index < QUICK_SETTINGS.length - 1 && <i aria-hidden="true" />}
-            </button>
-          ))}
-        </section>
-
-        <section className="tool-panel">
-          <div className="tabbar" role="tablist" aria-label="Editing tools">
-            <button
-              type="button"
-              role="tab"
-              id="tab-filters"
-              aria-controls="panel-filters"
-              aria-selected={tab === "filters"}
-              className={tab === "filters" ? "active" : ""}
-              onClick={() => setTab("filters")}
-            >
-              Presets
-            </button>
-            <button
-              type="button"
-              role="tab"
-              id="tab-crop"
-              aria-controls="panel-crop"
-              aria-selected={tab === "crop"}
-              className={tab === "crop" ? "active" : ""}
-              onClick={() => setTab("crop")}
-            >
-              Crop
-            </button>
-            <button
-              type="button"
-              role="tab"
-              id="tab-adjust"
-              aria-controls="panel-adjust"
-              aria-selected={tab === "adjust"}
-              className={tab === "adjust" ? "active" : ""}
-              onClick={() => setTab("adjust")}
-            >
-              Adjust
-            </button>
-          </div>
-
-          <div className="edit-actions">
-            <button
-              type="button"
-              className="edit-action"
-              onClick={copyEdits}
-              disabled={!image}
-            >
-              <Copy size={14} /> Copy edit
-            </button>
-            <button
-              type="button"
-              className="edit-action"
-              onClick={pasteEdits}
-              disabled={!clipboard}
-            >
-              <ClipboardPaste size={14} /> Paste
-            </button>
-            <button
-              type="button"
-              className="edit-action"
-              onClick={() => setPresetDialog({ mode: "save" })}
-              disabled={!image}
-            >
-              <Plus size={14} /> Save look
-            </button>
-            {tab === "adjust" && (
-              <button
-                className="reset-button"
-                type="button"
-                onClick={resetRecipe}
-              >
-                <RotateCcw size={14} /> Reset
-              </button>
-            )}
-          </div>
-
-          {tab === "filters" ? (
-            <div
-              className="filter-strip"
-              id="panel-filters"
-              role="tabpanel"
-              aria-label="Presets"
-              aria-labelledby="tab-filters"
-            >
-              {allFilters.map((filter) => (
-                <div className="filter-item" key={filter.id}>
-                  <button
-                    className={`filter-card ${selectedId === filter.id ? "selected" : ""}`}
-                    type="button"
-                    aria-label={filter.name}
-                    aria-pressed={selectedId === filter.id}
-                    onClick={() => startPreset(filter)}
-                  >
-                    <span
-                      className="filter-thumb"
-                      style={filter.swatch ? { background: filter.swatch } : undefined}
-                    >
-                      <img
-                        src={thumbnails[filter.id] || photoUrl}
-                        alt=""
-                        draggable="false"
-                      />
-                      {filter.tier !== "original" && (
-                        <span
-                          className={`tier-badge tier-${filter.tier}`}
-                          aria-hidden="true"
-                        >
-                          {tierLabel(filter.tier)}
-                        </span>
-                      )}
-                      {selectedId === filter.id && (
-                        <span className="selected-check">
-                          <Check size={12} strokeWidth={2.4} />
-                        </span>
-                      )}
-                    </span>
-                    <span className="filter-card-label">{filter.name}</span>
-                  </button>
-                  {filter.tier === "custom" && (
-                    <div className="preset-tools">
-                      <button
-                        type="button"
-                        aria-label={`Rename ${filter.name}`}
-                        onClick={() =>
-                          setPresetDialog({
-                            mode: "rename",
-                            id: filter.id,
-                            value: filter.name,
-                          })
-                        }
-                      >
-                        <Pencil size={12} />
-                      </button>
-                      <button
-                        type="button"
-                        aria-label={`Delete ${filter.name}`}
-                        onClick={() => deletePreset(filter.id)}
-                      >
-                        <Trash2 size={12} />
-                      </button>
-                    </div>
-                  )}
-                </div>
-              ))}
-            </div>
-          ) : tab === "adjust" ? (
-            <div
-              className="adjust-panel"
-              role="tabpanel"
-              id="panel-adjust"
-              aria-labelledby="tab-adjust"
-            >
-              <div
-                className="subtabs"
-                role="group"
-                aria-label="Adjustment groups"
-              >
-                {ADJUST_TABS.map((group) => (
-                  <button
-                    key={group.id}
-                    type="button"
-                    className={`subtab ${adjustGroup === group.id ? "active" : ""}`}
-                    aria-pressed={adjustGroup === group.id}
-                    onClick={() => setAdjustGroup(group.id)}
-                  >
-                    {group.label}
-                  </button>
-                ))}
-              </div>
-
-              {adjustGroup === "hsl" ? (
-                <div className="hsl-panel">
-                  <div
-                    className="hsl-channels"
-                    role="group"
-                    aria-label="HSL color channel"
-                  >
-                    {HSL_CHANNELS.map((channel) => (
-                      <button
-                        key={channel.id}
-                        type="button"
-                        className={`hsl-channel ${hslChannel === channel.id ? "active" : ""}`}
-                        aria-pressed={hslChannel === channel.id}
-                        onClick={() => setHslChannel(channel.id)}
-                      >
-                        <span
-                          className="hsl-swatch"
-                          style={{ background: channel.swatch }}
-                        />
-                        {channel.label}
-                      </button>
-                    ))}
-                  </div>
-                  <div className="adjustment-grid">
-                    {HSL_CONTROLS.map((control) => {
-                      const value = activeHsl[control.key];
-                      const progress =
-                        ((value - control.min) /
-                          (control.max - control.min)) *
-                        100;
-                      return (
-                        <label
-                          className="adjustment-control"
-                          id={`hsl-${hslChannel}-${control.key}`}
-                          key={control.key}
-                        >
-                          <span className="adjustment-label">
-                            {control.label}
-                          </span>
-                          <output>
-                            {value > 0 ? "+" : ""}
-                            {value}
-                          </output>
-                          <input
-                            type="range"
-                            min={control.min}
-                            max={control.max}
-                            step={control.step}
-                            value={value}
-                            onChange={(event) =>
-                              updateHsl(
-                                hslChannel,
-                                control.key,
-                                event.target.value,
-                              )
-                            }
-                            onPointerDown={beginHistoryTransaction}
-                            onKeyDown={beginHistoryTransaction}
-                            onPointerUp={endHistoryTransaction}
-                            onKeyUp={endHistoryTransaction}
-                            onBlur={endHistoryTransaction}
-                            style={{ "--range-fill": `${progress}%` }}
-                            aria-label={`${hslChannel} ${control.label}`}
-                            aria-valuetext={`${value > 0 ? "+" : ""}${value}`}
-                          />
-                        </label>
-                      );
-                    })}
-                  </div>
-                </div>
-              ) : adjustGroup === "grade" ? (
-                <div className="adjustment-grid grade-grid">
-                  {SPLIT_TONE_CONTROLS.map((control) => {
-                    const strength = recipe[control.key];
-                    const hue = recipe[control.hueKey];
-                    return (
-                      <div className="split-control" key={control.key}>
-                        <label className="adjustment-control">
-                          <span className="adjustment-label">
-                            {control.label}
-                          </span>
-                          <output>{strength}</output>
-                          <input
-                            type="range"
-                            min={control.min}
-                            max={control.max}
-                            step={control.step}
-                            value={strength}
-                            onChange={(event) =>
-                              updateSplit(control.key, event.target.value)
-                            }
-                            onPointerDown={beginHistoryTransaction}
-                            onKeyDown={beginHistoryTransaction}
-                            onPointerUp={endHistoryTransaction}
-                            onKeyUp={endHistoryTransaction}
-                            onBlur={endHistoryTransaction}
-                            style={{
-                              "--range-fill": `${(strength / 100) * 100}%`,
-                            }}
-                            aria-label={control.label}
-                            aria-valuetext={`${strength}`}
-                          />
-                        </label>
-                        <label className="adjustment-control hue-control">
-                          <span className="adjustment-label">Hue</span>
-                          <output>{hue}&deg;</output>
-                          <input
-                            type="range"
-                            min="0"
-                            max="359"
-                            step="1"
-                            value={hue}
-                            onChange={(event) =>
-                              updateSplit(control.hueKey, event.target.value)
-                            }
-                            onPointerDown={beginHistoryTransaction}
-                            onKeyDown={beginHistoryTransaction}
-                            onPointerUp={endHistoryTransaction}
-                            onKeyUp={endHistoryTransaction}
-                            onBlur={endHistoryTransaction}
-                            className="hue-range"
-                            style={{ "--range-fill": `${(hue / 359) * 100}%` }}
-                            aria-label={`${control.label} hue`}
-                            aria-valuetext={`${hue} degrees`}
-                          />
-                        </label>
-                      </div>
-                    );
-                  })}
-                </div>
-              ) : (
-                <div className="adjustment-grid">
-                  {ADJUSTMENTS.filter(
-                    (adjustment) => adjustment.group === adjustGroup,
-                  ).map((adjustment) => {
-                    const value = recipe[adjustment.key];
-                    const progress =
-                      ((value - adjustment.min) /
-                        (adjustment.max - adjustment.min)) *
-                      100;
-                    return (
-                      <label
-                        className="adjustment-control"
-                        id={`adjust-${adjustment.key}`}
-                        key={adjustment.key}
-                      >
-                        <span className="adjustment-label">
-                          {adjustment.label}
-                        </span>
-                        <output>{adjustment.display(value)}</output>
-                        <input
-                          type="range"
-                          min={adjustment.min}
-                          max={adjustment.max}
-                          step={adjustment.step}
-                          value={value}
-                          onChange={(event) =>
-                            updateAdjustment(
-                              adjustment.key,
-                              event.target.value,
-                            )
-                          }
-                          onPointerDown={beginHistoryTransaction}
-                          onKeyDown={beginHistoryTransaction}
-                          onPointerUp={endHistoryTransaction}
-                          onKeyUp={endHistoryTransaction}
-                          onBlur={endHistoryTransaction}
-                          style={{ "--range-fill": `${progress}%` }}
-                          aria-label={adjustment.label}
-                          aria-valuetext={adjustment.display(value)}
-                        />
-                      </label>
-                    );
-                  })}
-                </div>
-              )}
-            </div>
-          ) : (
-            <div
-              className="crop-panel"
-              role="tabpanel"
-              id="panel-crop"
-              aria-labelledby="tab-crop"
-            >
-              <div className="crop-section-label">FRAME</div>
-              <div
-                className="crop-ratios"
-                role="group"
-                aria-label="Crop aspect ratio"
-              >
-                {CROP_RATIOS.map((ratio) => (
-                  <button
-                    key={ratio.value}
-                    type="button"
-                    className={`ratio-button ${crop.ratio === ratio.value ? "selected" : ""}`}
-                    aria-pressed={crop.ratio === ratio.value}
-                    onClick={() => chooseCropRatio(ratio.value)}
-                  >
-                    {ratio.label}
-                  </button>
-                ))}
-              </div>
-              <div className="crop-tools">
-                <button
-                  type="button"
-                  className="crop-tool-button"
-                  aria-label="Rotate left"
-                  onClick={() => rotateCrop(-90)}
-                >
-                  <RotateCcw size={17} />
-                  <span>Rotate left</span>
-                </button>
-                <button
-                  type="button"
-                  className="crop-tool-button"
-                  aria-label="Rotate right"
-                  onClick={() => rotateCrop(90)}
-                >
-                  <RotateCw size={17} />
-                  <span>Rotate right</span>
-                </button>
-                <button
-                  type="button"
-                  className="crop-tool-button"
-                  aria-label="Flip horizontally"
-                  aria-pressed={crop.flipH}
-                  onClick={() => flipCrop("horizontal")}
-                >
-                  <FlipHorizontal2 size={17} />
-                  <span>Flip H</span>
-                </button>
-                <button
-                  type="button"
-                  className="crop-tool-button"
-                  aria-label="Flip vertically"
-                  aria-pressed={crop.flipV}
-                  onClick={() => flipCrop("vertical")}
-                >
-                  <FlipVertical2 size={17} />
-                  <span>Flip V</span>
-                </button>
-                <button
-                  type="button"
-                  className="reset-button crop-reset"
-                  onClick={resetCrop}
-                >
-                  Reset framing
-                </button>
-              </div>
-              <label className="crop-zoom" htmlFor="crop-straighten-range">
-                <span>Straighten</span>
-                <input
-                  id="crop-straighten-range"
-                  type="range"
-                  min="-45"
-                  max="45"
-                  step="0.5"
-                  value={crop.straighten}
-                  aria-label="Straighten"
-                  aria-valuetext={`${crop.straighten} degrees`}
-                  onChange={(event) =>
-                    updateCrop("straighten", Number(event.target.value))
-                  }
-                  onPointerDown={beginHistoryTransaction}
-                  onKeyDown={beginHistoryTransaction}
-                  onPointerUp={endHistoryTransaction}
-                  onKeyUp={endHistoryTransaction}
-                  onBlur={endHistoryTransaction}
-                  style={{
-                    "--range-fill": `${((crop.straighten + 45) / 90) * 100}%`,
-                  }}
-                />
-                <output>{crop.straighten.toFixed(1)}&deg;</output>
-              </label>
-              <label className="crop-zoom" htmlFor="crop-zoom-range">
-                <span>Zoom</span>
-                <input
-                  id="crop-zoom-range"
-                  type="range"
-                  min="1"
-                  max="3"
-                  step="0.01"
-                  value={crop.zoom}
-                  aria-label="Crop zoom"
-                  aria-valuetext={`${crop.zoom.toFixed(2)} times`}
-                  onChange={(event) =>
-                    updateCrop("zoom", Number(event.target.value))
-                  }
-                  onPointerDown={beginHistoryTransaction}
-                  onKeyDown={beginHistoryTransaction}
-                  onPointerUp={endHistoryTransaction}
-                  onKeyUp={endHistoryTransaction}
-                  onBlur={endHistoryTransaction}
-                  style={{ "--range-fill": `${((crop.zoom - 1) / 2) * 100}%` }}
-                />
-                <output>{crop.zoom.toFixed(2)}×</output>
-              </label>
-              <p className="crop-hint">
-                Drag the photo to reposition it. All edits stay on this device.
-              </p>
+          {image && tab === "crop" && cropGeometry && (
+            <div className="image-meta">{aspectLabel}</div>
+          )}
+          {image && (
+            <div className="stage-caption">
+              {tab === "crop"
+                ? "Drag to reposition · pinch to zoom"
+                : "Hold the photo to compare"}
             </div>
           )}
         </section>
 
-        <footer className="action-bar">
-          <button className="add-photo" type="button" onClick={openPicker}>
-            <ImagePlus size={27} strokeWidth={1.7} />
-            <span>Add photo</span>
-          </button>
-          <button
-            className="export-image"
-            type="button"
-            onClick={() => setExportOpen(true)}
-            disabled={!image || exporting}
-          >
-            <Download size={19} />
-            <span>{exporting ? "Processing…" : "Export image"}</span>
-          </button>
-        </footer>
-        <div className="privacy-note">
-          <span className="privacy-dot" />
-          Your photo stays in this browser
-        </div>
-        {DEMO_URL && (
-          <p className="photo-credit">
-            Demo sample: user-provided image. Rights for public reuse have not
-            been verified; this asset is included only in this local review
-            build.
-          </p>
-        )}
+        <section className="dock">
+          <section className="filter-intro" aria-live="polite">
+            <div className="filter-heading">
+              <div>
+                <div className="eyebrow">
+                  {image
+                    ? `PRESET  ${pad(Math.max(presetIndex + 1, 1))} / ${pad(filterCount)}`
+                    : "LOCAL PHOTO EDITOR"}
+                </div>
+                <h1>{image ? activeFilter.name : "Stillroom"}</h1>
+                <p>
+                  {image
+                    ? activeFilter.mood
+                    : "Import a photo to begin — everything stays on this device."}
+                </p>
+              </div>
+              {image && (
+                <div className="intensity-number">
+                  {activeFilter.tier === "original" ? "—" : intensity}
+                </div>
+              )}
+            </div>
+            {image && (
+              <EditSlider
+                id="intensity-range"
+                variant="row"
+                label="Intensity"
+                min={0}
+                max={100}
+                step={1}
+                value={intensity}
+                display={
+                  activeFilter.tier === "original" ? "—" : `${intensity}%`
+                }
+                disabled={activeFilter.tier === "original"}
+                onChange={(value) => {
+                  if (activeFilter.tier === "original") return;
+                  setIntensity(value);
+                }}
+                beginEdit={beginHistoryTransaction}
+                endEdit={endHistoryTransaction}
+              />
+            )}
+          </section>
+
+          {image && tab === "filters" && (
+            <section
+              className="quick-controls"
+              aria-label="Quick adjustment controls"
+            >
+              {QUICK_SETTINGS.map(({ key, label, Icon }, index) => (
+                <button
+                  className="quick-control"
+                  type="button"
+                  key={key}
+                  onClick={openAdjust}
+                >
+                  <Icon size={24} strokeWidth={1.65} />
+                  <span className="quick-copy">
+                    <span>{label}</span>
+                    <strong>
+                      {key !== "grain" && recipe[key] > 0 ? "+" : ""}
+                      {recipe[key]}
+                    </strong>
+                  </span>
+                  {index < QUICK_SETTINGS.length - 1 && <i aria-hidden="true" />}
+                </button>
+              ))}
+            </section>
+          )}
+
+          <section className="tool-panel">
+            <div className="tabbar" role="tablist" aria-label="Editing tools">
+              <button
+                type="button"
+                role="tab"
+                id="tab-filters"
+                aria-controls="panel-filters"
+                aria-selected={tab === "filters"}
+                className={tab === "filters" ? "active" : ""}
+                onClick={() => setTab("filters")}
+              >
+                Presets
+              </button>
+              <button
+                type="button"
+                role="tab"
+                id="tab-crop"
+                aria-controls="panel-crop"
+                aria-selected={tab === "crop"}
+                className={tab === "crop" ? "active" : ""}
+                onClick={() => setTab("crop")}
+              >
+                Crop
+              </button>
+              <button
+                type="button"
+                role="tab"
+                id="tab-adjust"
+                aria-controls="panel-adjust"
+                aria-selected={tab === "adjust"}
+                className={tab === "adjust" ? "active" : ""}
+                onClick={() => setTab("adjust")}
+              >
+                Adjust
+              </button>
+              <button
+                type="button"
+                className="edit-action tabbar-save"
+                onClick={() => setPresetDialog({ mode: "save" })}
+                disabled={!image}
+              >
+                <Plus size={14} /> Save look
+              </button>
+            </div>
+
+            <div className="panel-area">
+              {tab === "filters" ? (
+                <div
+                  className="filter-strip"
+                  id="panel-filters"
+                  role="tabpanel"
+                  aria-label="Presets"
+                  aria-labelledby="tab-filters"
+                >
+                  {allFilters.map((filter) => (
+                    <div className="filter-item" key={filter.id}>
+                      <button
+                        className={`filter-card ${selectedId === filter.id ? "selected" : ""}`}
+                        type="button"
+                        aria-label={filter.name}
+                        aria-pressed={selectedId === filter.id}
+                        onClick={() => startPreset(filter)}
+                      >
+                        <span
+                          className="filter-thumb"
+                          style={filter.swatch ? { background: filter.swatch } : undefined}
+                        >
+                          {(thumbnails[filter.id] || photoUrl) && (
+                            <img
+                              src={thumbnails[filter.id] || photoUrl}
+                              alt=""
+                              draggable="false"
+                            />
+                          )}
+                          {selectedId === filter.id && (
+                            <span className="selected-check">
+                              <Check size={12} strokeWidth={2.4} />
+                            </span>
+                          )}
+                        </span>
+                        <span className="filter-card-label">{filter.name}</span>
+                      </button>
+                      {filter.tier === "custom" && (
+                        <div className="preset-tools">
+                          <button
+                            type="button"
+                            aria-label={`Rename ${filter.name}`}
+                            onClick={() =>
+                              setPresetDialog({
+                                mode: "rename",
+                                id: filter.id,
+                                value: filter.name,
+                              })
+                            }
+                          >
+                            <Pencil size={12} />
+                          </button>
+                          <button
+                            type="button"
+                            aria-label={`Delete ${filter.name}`}
+                            onClick={() => deletePreset(filter.id)}
+                          >
+                            <Trash2 size={12} />
+                          </button>
+                        </div>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              ) : tab === "adjust" ? (
+                <div
+                  className="adjust-panel"
+                  role="tabpanel"
+                  id="panel-adjust"
+                  aria-labelledby="tab-adjust"
+                >
+                  <div className="panel-toolbar">
+                    <span className="crop-section-label">FINE-TUNE</span>
+                    <button
+                      type="button"
+                      className="reset-button"
+                      onClick={resetRecipe}
+                    >
+                      <RotateCcw size={13} /> Reset
+                    </button>
+                  </div>
+                  <div className="adjustment-grid">
+                    {ADJUSTMENTS.map((adjustment) => (
+                      <EditSlider
+                        key={adjustment.key}
+                        label={adjustment.label}
+                        min={adjustment.min}
+                        max={adjustment.max}
+                        step={adjustment.step}
+                        value={recipe[adjustment.key]}
+                        display={adjustment.display(recipe[adjustment.key])}
+                        onChange={(value) =>
+                          updateAdjustment(adjustment.key, value)
+                        }
+                        beginEdit={beginHistoryTransaction}
+                        endEdit={endHistoryTransaction}
+                      />
+                    ))}
+                  </div>
+                </div>
+              ) : (
+                <div
+                  className="crop-panel"
+                  role="tabpanel"
+                  id="panel-crop"
+                  aria-labelledby="tab-crop"
+                >
+                  <div className="crop-section-label">FRAME</div>
+                  <div
+                    className="crop-ratios"
+                    role="group"
+                    aria-label="Crop aspect ratio"
+                  >
+                    {CROP_RATIOS.map((ratio) => (
+                      <button
+                        key={ratio.value}
+                        type="button"
+                        className={`ratio-button ${crop.ratio === ratio.value ? "selected" : ""}`}
+                        aria-pressed={crop.ratio === ratio.value}
+                        onClick={() => chooseCropRatio(ratio.value)}
+                      >
+                        {ratio.label}
+                      </button>
+                    ))}
+                  </div>
+                  <div className="crop-tools">
+                    <button
+                      type="button"
+                      className="crop-tool-button"
+                      aria-label="Rotate left"
+                      onClick={() => rotateCrop(-90)}
+                    >
+                      <RotateCcw size={17} />
+                      <span>Rotate left</span>
+                    </button>
+                    <button
+                      type="button"
+                      className="crop-tool-button"
+                      aria-label="Rotate right"
+                      onClick={() => rotateCrop(90)}
+                    >
+                      <RotateCw size={17} />
+                      <span>Rotate right</span>
+                    </button>
+                    <button
+                      type="button"
+                      className="crop-tool-button"
+                      aria-label="Flip horizontally"
+                      aria-pressed={crop.flipH}
+                      onClick={() => flipCrop("horizontal")}
+                    >
+                      <FlipHorizontal2 size={17} />
+                      <span>Flip H</span>
+                    </button>
+                    <button
+                      type="button"
+                      className="crop-tool-button"
+                      aria-label="Flip vertically"
+                      aria-pressed={crop.flipV}
+                      onClick={() => flipCrop("vertical")}
+                    >
+                      <FlipVertical2 size={17} />
+                      <span>Flip V</span>
+                    </button>
+                    <button
+                      type="button"
+                      className="reset-button crop-reset"
+                      onClick={resetCrop}
+                    >
+                      Reset framing
+                    </button>
+                  </div>
+                  <EditSlider
+                    id="crop-straighten-range"
+                    variant="row"
+                    label="Straighten"
+                    min={-45}
+                    max={45}
+                    step={0.5}
+                    value={crop.straighten}
+                    display={`${crop.straighten.toFixed(1)}°`}
+                    onChange={(value) => updateCrop("straighten", value)}
+                    beginEdit={beginHistoryTransaction}
+                    endEdit={endHistoryTransaction}
+                  />
+                  <EditSlider
+                    id="crop-zoom-range"
+                    variant="row"
+                    label="Zoom"
+                    min={1}
+                    max={3}
+                    step={0.01}
+                    value={crop.zoom}
+                    display={`${crop.zoom.toFixed(2)}×`}
+                    onChange={(value) => updateCrop("zoom", value)}
+                    beginEdit={beginHistoryTransaction}
+                    endEdit={endHistoryTransaction}
+                  />
+                </div>
+              )}
+            </div>
+          </section>
+
+          <div className="privacy-note">
+            <span className="privacy-dot" />
+            Your photo stays in this browser
+          </div>
+          {DEMO_URL && (
+            <p className="photo-credit">Demo sample photo provided by the author.</p>
+          )}
+        </section>
       </main>
 
       {toast && (
@@ -1587,10 +1529,13 @@ function App() {
           onClick={() => setPresetDialog(null)}
         >
           <section
+            ref={presetSheetRef}
             className="export-sheet preset-sheet"
             role="dialog"
             aria-modal="true"
             aria-labelledby="preset-title"
+            style={presetDrag.sheetStyle}
+            {...presetDrag.dragProps}
             onClick={(event) => event.stopPropagation()}
           >
             <div className="sheet-grab" />
@@ -1640,14 +1585,12 @@ function App() {
             <button
               className="confirm-export"
               type="button"
-              onClick={(event) => {
-                const input = event.currentTarget.parentElement.querySelector(
-                  ".preset-name-field input",
-                );
+              onClick={() => {
+                const value = presetNameRef.current?.value ?? "";
                 if (presetDialog.mode === "rename") {
-                  renamePreset(presetDialog.id, input?.value ?? "");
+                  renamePreset(presetDialog.id, value);
                 } else {
-                  saveCurrentAsPreset(input?.value ?? "");
+                  saveCurrentAsPreset(value);
                 }
               }}
             >
@@ -1670,6 +1613,8 @@ function App() {
             role="dialog"
             aria-modal="true"
             aria-labelledby="export-title"
+            style={exportDrag.sheetStyle}
+            {...exportDrag.dragProps}
             onClick={(event) => event.stopPropagation()}
           >
             <div className="sheet-grab" />
@@ -1713,22 +1658,24 @@ function App() {
               </button>
             </div>
             <div className="option-label">IMAGE SIZE</div>
-            <div className="size-row">
+            <div className="choice-row">
               <button
                 type="button"
-                className={exportSize === "original" ? "chosen" : ""}
+                className={`choice-card size-card ${exportSize === "original" ? "chosen" : ""}`}
                 onClick={() => setExportSize("original")}
               >
                 <span>Large</span>
                 <small>Up to {largeExportEdge} px</small>
+                {exportSize === "original" && <Check size={16} />}
               </button>
               <button
                 type="button"
-                className={exportSize === "web" ? "chosen" : ""}
+                className={`choice-card size-card ${exportSize === "web" ? "chosen" : ""}`}
                 onClick={() => setExportSize("web")}
               >
                 <span>Web</span>
                 <small>Up to 2500 px</small>
+                {exportSize === "web" && <Check size={16} />}
               </button>
             </div>
             <button
@@ -1750,7 +1697,7 @@ function App() {
 }
 
 function simplifyRatio(width, height) {
-  if (!width || !height) return "4:5";
+  if (!width || !height) return "1:1";
   const ratio = width / height;
   if (Math.abs(ratio - 9 / 16) < 0.04) return "9:16";
   if (Math.abs(ratio - 16 / 9) < 0.04) return "16:9";

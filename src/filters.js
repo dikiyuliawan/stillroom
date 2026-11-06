@@ -33,12 +33,6 @@ const recipe = (overrides) => ({
   ...overrides,
 })
 
-export const PRESET_TIERS = {
-  free: 'Free',
-  pro: 'Pro',
-  original: 'Original',
-}
-
 // The neutral preset at the start of the strip: no filter effect, so the
 // photo shows exactly as imported (before any manual tweaks).
 export const ORIGINAL = {
@@ -366,57 +360,31 @@ export const FILTERS = [ORIGINAL, ...LOOKS]
 
 const signed = (value) => `${value > 0 ? '+' : ''}${value}`
 
-export const ADJUSTMENT_GROUPS = [
-  { id: 'light', label: 'Light' },
-  { id: 'color', label: 'Color' },
-  { id: 'effects', label: 'Effects' },
-]
-
+// The nine user-facing fine-tuning controls, listed in one flat panel. The
+// recipes below may still set deeper keys (whites, blacks, split toning,
+// grain size) that only the engine sees — those are the preset author's
+// dials, not the editor's.
 export const ADJUSTMENTS = [
-  { key: 'exposure', label: 'Exposure', group: 'light', min: -1, max: 1, step: 0.01, display: (n) => `${n > 0 ? '+' : ''}${n.toFixed(2)} EV` },
-  { key: 'contrast', label: 'Contrast', group: 'light', min: -100, max: 100, step: 1, display: signed },
-  { key: 'highlights', label: 'Highlights', group: 'light', min: -100, max: 100, step: 1, display: signed },
-  { key: 'shadows', label: 'Shadows', group: 'light', min: -100, max: 100, step: 1, display: signed },
-  { key: 'whites', label: 'Whites', group: 'light', min: -100, max: 100, step: 1, display: signed },
-  { key: 'blacks', label: 'Blacks', group: 'light', min: -100, max: 100, step: 1, display: signed },
-  { key: 'temp', label: 'Temperature', group: 'color', min: -100, max: 100, step: 1, display: signed },
-  { key: 'tint', label: 'Tint', group: 'color', min: -100, max: 100, step: 1, display: signed },
-  { key: 'saturation', label: 'Saturation', group: 'color', min: -100, max: 100, step: 1, display: signed },
-  { key: 'vibrance', label: 'Vibrance', group: 'color', min: -100, max: 100, step: 1, display: signed },
-  { key: 'clarity', label: 'Clarity', group: 'effects', min: 0, max: 100, step: 1, display: (n) => `${n}` },
-  { key: 'sharpen', label: 'Sharpen', group: 'effects', min: 0, max: 100, step: 1, display: (n) => `${n}` },
-  { key: 'fade', label: 'Fade', group: 'effects', min: 0, max: 100, step: 1, display: (n) => `${n}` },
-  { key: 'grain', label: 'Grain', group: 'effects', min: 0, max: 100, step: 1, display: (n) => `${n}` },
-  { key: 'grainSize', label: 'Grain size', group: 'effects', min: 0, max: 100, step: 1, display: (n) => `${n}` },
-  { key: 'vignette', label: 'Vignette', group: 'effects', min: -100, max: 100, step: 1, display: signed },
+  { key: 'exposure', label: 'Exposure', min: -1, max: 1, step: 0.01, display: (n) => `${n > 0 ? '+' : ''}${n.toFixed(2)} EV` },
+  { key: 'contrast', label: 'Contrast', min: -100, max: 100, step: 1, display: signed },
+  { key: 'temp', label: 'Temperature', min: -100, max: 100, step: 1, display: signed },
+  { key: 'tint', label: 'Tint', min: -100, max: 100, step: 1, display: signed },
+  { key: 'saturation', label: 'Saturation', min: -100, max: 100, step: 1, display: signed },
+  { key: 'sharpen', label: 'Sharpen', min: 0, max: 100, step: 1, display: (n) => `${n}` },
+  { key: 'fade', label: 'Fade', min: 0, max: 100, step: 1, display: (n) => `${n}` },
+  { key: 'grain', label: 'Grain', min: 0, max: 100, step: 1, display: (n) => `${n}` },
+  { key: 'vignette', label: 'Vignette', min: -100, max: 100, step: 1, display: signed },
 ]
 
-export const SPLIT_TONE_CONTROLS = [
-  { key: 'splitShadowStrength', label: 'Shadow tone', hueKey: 'splitShadowHue', min: 0, max: 100, step: 1, display: (n) => `${n}` },
-  { key: 'splitHighlightStrength', label: 'Highlight tone', hueKey: 'splitHighlightHue', min: 0, max: 100, step: 1, display: (n) => `${n}` },
-]
-
-export const HSL_CHANNELS = [
-  { id: 'red', label: 'Red', hue: 0, swatch: '#c46a63' },
-  { id: 'orange', label: 'Orange', hue: 30, swatch: '#c9965c' },
-  { id: 'yellow', label: 'Yellow', hue: 60, swatch: '#c3b45c' },
-  { id: 'green', label: 'Green', hue: 120, swatch: '#6f9c6a' },
-  { id: 'blue', label: 'Blue', hue: 240, swatch: '#6384ad' },
-  { id: 'purple', label: 'Purple', hue: 300, swatch: '#8f6fa6' },
-]
-
-export const HSL_CONTROLS = [
-  { key: 'h', label: 'Hue', min: -100, max: 100, step: 1 },
-  { key: 's', label: 'Saturation', min: -100, max: 100, step: 1 },
-  { key: 'l', label: 'Luminance', min: -100, max: 100, step: 1 },
-]
+// Internal channel map for per-recipe HSL grading carried by saved looks.
+const HSL_CHANNELS = ['red', 'orange', 'yellow', 'green', 'blue', 'purple']
 
 export const createHsl = () =>
-  Object.fromEntries(HSL_CHANNELS.map((channel) => [channel.id, { h: 0, s: 0, l: 0 }]))
+  Object.fromEntries(HSL_CHANNELS.map((channel) => [channel, { h: 0, s: 0, l: 0 }]))
 
 export const isHslNeutral = (hsl) =>
   !hsl ||
   HSL_CHANNELS.every((channel) => {
-    const value = hsl[channel.id]
+    const value = hsl[channel]
     return !value || (!value.h && !value.s && !value.l)
   })

@@ -21,9 +21,9 @@ async function ready(page) {
   await page.evaluate(() => window.localStorage.clear());
   await page.reload();
   await page.waitForFunction(() => {
-    const image = document.querySelector(".original-photo");
+    const framing = document.querySelector(".original-framing");
     const canvas = document.querySelector(".processed-photo");
-    return image?.naturalWidth > 0 && canvas?.width > 0 && canvas?.height > 0;
+    return framing?.width > 0 && canvas?.width > 0 && canvas?.height > 0;
   });
 }
 
@@ -51,24 +51,20 @@ test("mobile and desktop layouts stay within the viewport", async ({
     page.getByRole("heading", { name: "Original", exact: true }),
   ).toBeVisible();
   await expect(page.locator("#intensity-range")).toBeDisabled();
-  await expect(page.locator(".original-photo")).toHaveAttribute(
-    "src",
-    "/tests/fixtures/demo-user-provided.webp",
-  );
   await expect(
-    page.getByText(/Demo sample: user-provided image/),
-  ).toBeVisible();
-  await expect(
-    page.getByText(/Rights for public reuse have not been verified/),
+    page.getByText("Demo sample photo provided by the author."),
   ).toBeVisible();
   await expect(
     page.getByRole("tabpanel", { name: "Presets" }).getByRole("button"),
   ).toHaveCount(25);
+  // The free app shows no subscription badges anywhere.
+  await expect(page.locator(".tier-badge, .tier-chip")).toHaveCount(0);
   await page.screenshot({
     path: path.join(artifacts, "stillroom-mobile.png"),
     fullPage: true,
   });
   await page.getByRole("tab", { name: "Crop", exact: true }).click();
+  await expect(page.locator(".image-meta")).toBeVisible();
   await page.getByRole("button", { name: "4:5", exact: true }).click();
   await page.screenshot({
     path: path.join(artifacts, "stillroom-crop-review.png"),
@@ -83,8 +79,15 @@ test("mobile and desktop layouts stay within the viewport", async ({
     }));
     expect(layout.content).toBeLessThanOrEqual(layout.width);
     await expect(
-      page.getByRole("button", { name: "Export image", exact: true }),
+      page.getByRole("button", { name: "Export", exact: true }),
     ).toBeVisible();
+    // The docked tools must sit inside the viewport without page scrolling.
+    const dock = await page.locator(".tabbar").evaluate((element) => {
+      const box = element.getBoundingClientRect();
+      return { top: box.top, bottom: box.bottom, viewport: window.innerHeight };
+    });
+    expect(dock.top).toBeGreaterThanOrEqual(0);
+    expect(dock.bottom).toBeLessThanOrEqual(dock.viewport + 1);
   }
   await page.screenshot({
     path: path.join(artifacts, "stillroom-desktop.png"),
@@ -154,18 +157,20 @@ test("every preset changes the preview; intensity, compare, and adjustments work
   await expect(page.locator(".processed-photo")).not.toHaveClass(/is-hidden/);
 
   await page.getByRole("tab", { name: "Adjust", exact: true }).click();
-  await page.getByRole("button", { name: "Color", exact: true }).click();
   const temperature = page.getByRole("slider", {
     name: "Temperature",
     exact: true,
   });
   await temperature.press("End");
   await expect(temperature).toHaveValue("100");
-  await expect(page.locator(".quick-control").first()).toContainText("+100");
   await page.screenshot({
     path: path.join(artifacts, "stillroom-adjustments.png"),
     fullPage: true,
   });
+  // Quick controls live on the presets tab and mirror the recipe.
+  await page.getByRole("tab", { name: "Presets", exact: true }).click();
+  await expect(page.locator(".quick-control").first()).toContainText("+100");
+  await page.getByRole("tab", { name: "Adjust", exact: true }).click();
   await page.getByRole("button", { name: "Reset", exact: true }).click();
   await expect(temperature).toHaveValue("11");
   await expect(intensity).toHaveValue("72");
@@ -179,7 +184,7 @@ test("crop ratios, zoom/pan, rotation, undo/redo, and cropped PNG export work", 
     .locator('input[type="file"]')
     .setInputFiles(path.resolve("tests/fixtures/landscape.png"));
   await page.waitForFunction(
-    () => document.querySelector(".original-photo")?.naturalWidth === 1280,
+    () => document.querySelector(".original-framing")?.width === 1280,
   );
   await page.getByRole("tab", { name: "Crop", exact: true }).click();
   await page.getByRole("button", { name: "1:1", exact: true }).click();
@@ -213,7 +218,7 @@ test("crop ratios, zoom/pan, rotation, undo/redo, and cropped PNG export work", 
     });
     expect(actual).toBeCloseTo(expected, 1);
   }
-  const zoom = page.getByRole("slider", { name: "Crop zoom", exact: true });
+  const zoom = page.getByRole("slider", { name: "Zoom", exact: true });
   await zoom.press("End");
   await expect(zoom).toHaveValue("3");
   const canvasFingerprint = () =>
@@ -239,7 +244,12 @@ test("crop ratios, zoom/pan, rotation, undo/redo, and cropped PNG export work", 
     page.evaluate(async ({ dx, dy }) => {
       const { getCropGeometry, renderFiltered } =
         await import("/src/image-processing.js");
-      const source = document.querySelector(".original-photo");
+      const source = await new Promise((resolve, reject) => {
+        const img = new Image();
+        img.onload = () => resolve(img);
+        img.onerror = () => reject(new Error("fixture failed to load"));
+        img.src = "/tests/fixtures/landscape.png";
+      });
       const stage = document
         .querySelector(".photo-stage")
         .getBoundingClientRect();
@@ -326,7 +336,7 @@ test("crop ratios, zoom/pan, rotation, undo/redo, and cropped PNG export work", 
     .getByRole("button", { name: "Reset framing", exact: true })
     .click();
   await page.getByRole("button", { name: "1:1", exact: true }).click();
-  await page.getByRole("button", { name: "Export image", exact: true }).click();
+  await page.getByRole("button", { name: "Export", exact: true }).click();
   await page.getByRole("button", { name: /PNG Lossless/ }).click();
   const downloadPromise = page.waitForEvent("download");
   await page
@@ -347,10 +357,13 @@ test("local import keeps the image ratio and downloads valid PNG and JPG files",
   await page
     .locator('input[type="file"]')
     .setInputFiles(path.resolve("tests/fixtures/landscape.png"));
-  await expect(page.locator(".image-meta")).toContainText("Landscape");
   await page.waitForFunction(
     () => document.querySelector(".processed-photo")?.width === 1280,
   );
+  // The aspect label only appears while the crop tab is active.
+  await page.getByRole("tab", { name: "Crop", exact: true }).click();
+  await expect(page.locator(".image-meta")).toContainText("Landscape");
+  await page.getByRole("tab", { name: "Presets", exact: true }).click();
   const geometry = await page.locator(".photo-stage").evaluate((element) => {
     const box = element.getBoundingClientRect();
     return {
@@ -362,7 +375,7 @@ test("local import keeps the image ratio and downloads valid PNG and JPG files",
   expect(geometry.ratio).toBeCloseTo(1.6, 1);
   expect(geometry.width).toBeGreaterThan(300);
 
-  await page.getByRole("button", { name: "Export image", exact: true }).click();
+  await page.getByRole("button", { name: "Export", exact: true }).click();
   await expect(
     page.getByRole("dialog", { name: "Export your edit" }),
   ).toBeVisible();
@@ -380,7 +393,7 @@ test("local import keeps the image ratio and downloads valid PNG and JPG files",
   expect(pngData.readUInt32BE(16)).toBe(1280);
   expect(pngData.readUInt32BE(20)).toBe(800);
 
-  await page.getByRole("button", { name: "Export image", exact: true }).click();
+  await page.getByRole("button", { name: "Export", exact: true }).click();
   await page.getByRole("button", { name: /JPG Smaller file/ }).click();
   const jpgPromise = page.waitForEvent("download");
   await page
@@ -400,7 +413,7 @@ test("straighten and flip change the framing without empty corners", async ({ pa
     .locator('input[type="file"]')
     .setInputFiles(path.resolve("tests/fixtures/landscape.png"));
   await page.waitForFunction(
-    () => document.querySelector(".original-photo")?.naturalWidth === 1280,
+    () => document.querySelector(".original-framing")?.width === 1280,
   );
   await page.getByRole("tab", { name: "Crop", exact: true }).click();
 
@@ -432,7 +445,7 @@ test("straighten and flip change the framing without empty corners", async ({ pa
   await expect.poll(() => fingerprint(page)).not.toBe(flippedBefore);
 });
 
-test("saved looks, copy and paste edits, and session restore work", async ({ page }) => {
+test("saved looks and session restore work", async ({ page }) => {
   await ready(page);
   await page.getByRole("button", { name: "A6", exact: true }).click();
   await expect(page.getByRole("heading", { name: "A6", exact: true })).toBeVisible();
@@ -444,12 +457,13 @@ test("saved looks, copy and paste edits, and session restore work", async ({ pag
   await expect(page.getByRole("button", { name: "Morning", exact: true })).toBeVisible();
   await expect(page.getByRole("button", { name: "A6", exact: true }).first()).toBeVisible();
 
-  await page.getByRole("button", { name: "Copy edit", exact: true }).click();
+  // Re-applying the saved look runs it at full strength; built-ins sit at the
+  // strip default.
+  const intensity = page.locator("#intensity-range");
+  await page.getByRole("button", { name: "Morning", exact: true }).click();
+  await expect(intensity).toHaveValue("100");
   await page.getByRole("button", { name: "B5", exact: true }).click();
   await expect(page.getByRole("heading", { name: "B5", exact: true })).toBeVisible();
-  await page.getByRole("button", { name: "Paste", exact: true }).click();
-  await expect(page.getByRole("heading", { name: "B5", exact: true })).toBeVisible();
-  const intensity = page.locator("#intensity-range");
   await expect(intensity).toHaveValue("72");
 
   // The saved look survives a reload, and the session restores the selection.
@@ -497,19 +511,24 @@ test("keyboard shortcuts drive history, export, and preview", async ({ page }) =
   await expect(page.locator(".compare-tag")).toHaveCount(0);
 });
 
-test("split tone and HSL grading alter the preview", async ({ page }) => {
+test("the adjust panel exposes exactly nine sliders and none beyond it", async ({
+  page,
+}) => {
   await ready(page);
   await page.getByRole("tab", { name: "Adjust", exact: true }).click();
-  await page.getByRole("button", { name: "Grade", exact: true }).click();
-  const before = await fingerprint(page);
-  const shadowTone = page.getByRole("slider", { name: "Shadow tone", exact: true });
-  await shadowTone.fill("70");
-  await expect.poll(() => fingerprint(page)).not.toBe(before);
-
-  const gradeAfter = await fingerprint(page);
-  await page.getByRole("button", { name: "HSL", exact: true }).click();
-  await page.getByRole("button", { name: "Blue", exact: true }).click();
-  const hue = page.getByRole("slider", { name: "blue Hue", exact: true });
-  await hue.fill("60");
-  await expect.poll(() => fingerprint(page)).not.toBe(gradeAfter);
+  const sliders = page.locator("#panel-adjust input[type='range']");
+  await expect(sliders).toHaveCount(9);
+  await expect(
+    page.getByRole("slider", { name: "Exposure", exact: true }),
+  ).toBeVisible();
+  await expect(
+    page.getByRole("slider", { name: "Vignette", exact: true }),
+  ).toBeVisible();
+  // Grading tools live inside the preset recipes, not in the UI.
+  await expect(
+    page.getByRole("slider", { name: "Shadow tone", exact: true }),
+  ).toHaveCount(0);
+  await expect(
+    page.getByRole("slider", { name: /Hue/, exact: true }),
+  ).toHaveCount(0);
 });

@@ -77,13 +77,18 @@ test("tiled export matches the preview engine and every control alters pixels", 
 }) => {
   await page.goto("/");
   await page.waitForFunction(
-    () => document.querySelector(".original-photo")?.naturalWidth > 0,
+    () => document.querySelector(".original-framing")?.width > 0,
   );
   const result = await page.evaluate(async () => {
     const { renderFiltered, renderFilteredAsync, resolveRecipe } =
       await import("/src/image-processing.js");
     const { LOOKS, createHsl } = await import("/src/filters.js");
-    const source = document.querySelector(".original-photo");
+    const source = await new Promise((resolve, reject) => {
+      const img = new Image();
+      img.onload = () => resolve(img);
+      img.onerror = () => reject(new Error("demo fixture failed to load"));
+      img.src = "/tests/fixtures/demo-user-provided.webp";
+    });
     const preset = LOOKS[5].recipe;
     const recipe = resolveRecipe(preset, preset, 72);
     const hsl = {
@@ -163,7 +168,7 @@ test("invalid images fail gracefully and export dialog supports keyboard dismiss
 }) => {
   await page.goto("/");
   await page.waitForFunction(
-    () => document.querySelector(".original-photo")?.naturalWidth > 0,
+    () => document.querySelector(".original-framing")?.width > 0,
   );
   await page.locator('input[type="file"]').setInputFiles({
     name: "not-an-image.txt",
@@ -183,11 +188,10 @@ test("invalid images fail gracefully and export dialog supports keyboard dismiss
       exact: true,
     }),
   ).toBeVisible();
-  await expect(page.locator(".original-photo")).toHaveAttribute(
-    "src",
-    "/tests/fixtures/demo-user-provided.webp",
-  );
-  await page.getByRole("button", { name: "Export image", exact: true }).click();
+  await expect(
+    page.getByText("Demo sample photo provided by the author."),
+  ).toBeVisible();
+  await page.getByRole("button", { name: "Export", exact: true }).click();
   await expect(page.getByRole("dialog")).toBeVisible();
   await page.keyboard.press("Escape");
   await expect(page.getByRole("dialog")).toHaveCount(0);

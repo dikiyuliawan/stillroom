@@ -6,19 +6,19 @@ the naming people recognise from VSCO so a familiar starting point is easy to
 find. Every look is Stillroom's **own numeric recipe** running on its own canvas
 pipeline — no third-party preset data is copied or reproduced.
 
-## Access tiers
+## Library groups
 
-VSCO gates part of its library behind a subscription. Stillroom mirrors that
-grouping so the library reads the way you remember it, but **everything is
-unlocked** because all editing happens on your device.
+The looks are organized in two groups — the split the subscription apps use —
+but **everything is unlocked** and no badges are shown in the app. The grouping
+is only a way to browse the reference below.
 
-| Tier | Looks |
+| Group | Looks |
 | --- | --- |
 | **Original** | Original (applies nothing) |
 | **Free** | B1, B5, F2, G3, M3, M5, P5, T1, X1 |
 | **Pro** | A4, A5, A6, C1, C2, C3, G6, HB1, HB2, AL1, AL3, SS1, WE4, KE1, KP1 |
 
-## Free-tier looks
+## Free-group looks
 
 | Code | Mood | Character |
 | --- | --- | --- |
@@ -32,7 +32,7 @@ unlocked** because all editing happens on your device.
 | T1 | Moody fade · cool shadows | Slightly underexposed, cool blue shadows. |
 | X1 | Punchy warm · crisp detail | Strong contrast with warm, vivid color. |
 
-## Pro-tier looks
+## Pro-group looks
 
 | Code | Mood | Character |
 | --- | --- | --- |
@@ -57,13 +57,12 @@ unlocked** because all editing happens on your device.
 | Control | Range | Unit |
 | --- | --- | --- |
 | Exposure | −1 … +1 | EV |
-| Temp, Tint, Contrast, Saturation, Vibrance | −100 … +100 | — |
+| Temp, Tint, Contrast, Saturation | −100 … +100 | — |
 | Highlights, Shadows, Whites, Blacks | −100 … +100 | — |
 | Clarity, Sharpen, Fade, Grain, Grain size | 0 … 100 | — |
 | Vignette | −100 … +100 | — |
 | Split-tone strength | 0 … 100 | — |
 | Split-tone hue | 0 … 359 | degrees |
-| HSL hue / saturation / luminance | −100 … +100 | — |
 
 A preset is only a **starting point**. Intensity scales the preset from 0–100%;
 manual tweaks are applied on top at full strength, so dialling a preset down
@@ -71,19 +70,20 @@ never dilutes a correction you made by hand.
 
 ## Editing tools
 
-- **Presets** — Original plus 24 built-in looks plus any you save yourself.
-  Original applies nothing and starts every manual adjustment from zero.
+- **Presets** — Original plus 24 built-in looks plus any you save yourself,
+  docked at the bottom of the screen with live thumbnails. Original applies
+  nothing and starts every manual adjustment from zero.
+- **Intensity** — one slider for the selected look, always visible in the dock.
 - **Compare** — press and hold the photo (or hold <kbd>Space</kbd>) to see the
   untouched original until release.
 - **Crop** — aspect ratios, rotate 90°, horizontal/vertical flip, fine-angle
-  straighten (the frame auto-shrinks so no empty corners appear), zoom, and pan.
-- **Adjust** — Light (exposure, contrast, highlights, shadows, whites, blacks),
-  Color (temperature, tint, saturation, vibrance), Effects (clarity, sharpen,
-  fade, grain, grain size, vignette).
-- **Grade** — split toning: independent shadow and highlight hue plus strength.
-- **HSL** — per-channel hue, saturation, and luminance for red, orange, yellow,
-  green, blue, and purple.
-- **Copy / Paste edit** — carry the full look between photos.
+  straighten (the frame auto-shrinks so no empty corners appear), zoom by
+  slider or two-finger pinch, and one-finger pan.
+- **Adjust** — nine sliders in one flat panel: exposure, contrast, temperature,
+  tint, saturation, sharpen, fade, grain, vignette. The engine keeps the deeper
+  recipe keys (whites, blacks, highlights, shadows, vibrance, clarity, split
+  toning, grain size, per-channel HSL) for the preset library and for restoring
+  saved sessions; they are not exposed as editor controls.
 - **Save look** — store your current recipe as a reusable preset.
 
 ## Notes
